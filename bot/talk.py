@@ -38,11 +38,12 @@ class Room:
             self.last = {p: t for p, t in self.last.items() if now - t < 60}
         return False
 
-    def reply(self, channel: int, text: str, now: float | None = None) -> str:
+    def reply(self, channel: int, text: str, now: float | None = None) -> tuple[str, str]:
+        """Returns (her mood, what she says)."""
         now = time.time() if now is None else now
         talk, seen = self.talks.get(channel, (None, 0.0))
         if talk is None or now - seen > FORGET_AFTER:
             talk = Excelsia(self.model, self.tok)
         said = talk.reply(text)
         self.talks[channel] = (talk, now)
-        return said
+        return talk.mood.name, said

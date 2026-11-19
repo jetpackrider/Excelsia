@@ -60,9 +60,9 @@ def main() -> None:
         waiting += 1
         try:
             async with one_at_a_time, message.channel.typing():
-                said = await asyncio.to_thread(room.reply, message.channel.id, text)
+                mood, said = await asyncio.to_thread(room.reply, message.channel.id, text)
             if said:
-                await message.reply(said, mention_author=False)
+                await message.reply(f"[{mood}] {said}", mention_author=False)
         except discord.HTTPException as problem:
             log.warning("could not answer: %s", problem)
         finally:
