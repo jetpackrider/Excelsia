@@ -131,6 +131,34 @@ def test_a_bad_word_is_sent_back_for_repair_by_meaning():
     assert teacher.asked[1][-2] == {"role": "assistant", "content": "i am happy, thank you."}
 
 
+def test_an_overused_word_is_sent_back_too():
+    teacher = FakeTeacher(["the people remain.", "the waters remain."])
+    reply, tries = write_reply(teacher, tok, "system", "task", tries=3, tired=("people",))
+    assert (reply, tries) == ("the waters remain.", 2)
+    assert "people" in teacher.asked[1][-1]["content"]
+
+
+def test_the_tally_notices_what_she_leans_on():
+    from excelsia.gen_chats import Tally
+    tally = Tally(cap=0.15, after=10)
+    for i in range(10):
+        tally.add(tok.split("the people remain." if i < 6 else "the waters are near."))
+    assert tally.tired[0] == "people"      # in 6 of 10 replies
+    assert "the" not in tally.tired        # little words never count
+    assert "near" in tally.tired           # 4 of 10 is over the cap as well
+
+
+def test_she_can_tire_of_her_own_words():
+    model = GPT(Config(vocab_size=len(tok), block_size=32, n_layer=1, n_head=2, n_embd=32))
+    allowed = torch.tensor(tok.speak_mask)
+    people = tok.stoi["people"]
+    torch.manual_seed(0)
+    out = model.generate(torch.tensor([[tok.user, tok.excelsia]]), allowed, tok.end, 24,
+                         recent=[people] * 3, repeat=50.0, exempt=set())
+    assert people not in out and len(set(out)) == len(out)   # nothing said twice
+    assert all(tok.speak_mask[t] for t in out)               # and the word rule still holds
+
+
 def test_a_line_that_never_passes_is_dropped():
     teacher = FakeTeacher(["hello you."] * 3)
     assert write_reply(teacher, tok, "system", "task", tries=3) == ("", 3)

@@ -108,11 +108,26 @@ if the tab loses its connection. `scripts/kaggle.sh all` does the work. With two
 GPUs it trains on one while Gemma writes chats on the other, and chats are saved
 one at a time as they are written.
 
+## Tuning her by hand
+
+Two dials that need no training.
+
+```bash
+python -m excelsia.chat --repeat 1                       # she tires of words she just used
+python -m excelsia.tweak --down people body --by 2       # edit her weights directly
+python -m excelsia.chat --ckpt excelsia-tweaked.pt
+```
+
+`tweak` changes 384 of her roughly 18 million numbers so the words you name
+become rarer or more common everywhere, and saves the result as a new file. It
+is a blunt tool: it changes which words she reaches for, not what she has to
+say. Try `--up forest waters trees --by 3` to see it plainly.
+
 ## Where the training data comes from
 
 - The New York State Constitution (public law).
 - [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), a public dataset.
-- The 3,000 practice chats in `data/chats.jsonl`, written by DeepSeek's hosted API
+- The practice chats in `data/chats.jsonl`, written by DeepSeek's hosted API
   (the `deepseek-flash` model) in November 2026 with `--teacher deepseek`.
 
 DeepSeek's API terms allowed using its output to train other models when these
@@ -123,18 +138,20 @@ local teacher.
 
 ## Status
 
-Tested: the word list, the tokenizer, the speaking mask, and the English stage on
-an Apple Silicon laptop (about 9,500 words a second for the small model). The
-Kaggle script has run end to end on Kaggle's free T4 GPUs. The chat writer has
-produced the 3,000 chats here, and every reply in them passes the word check.
+Tested: the word list, the tokenizer, the speaking mask, and every stage end to
+end. English was learned on Kaggle's free T4 GPUs (18 million parameters, all 2.7
+million stories, about two and a half hours), then she studied the practice chats
+for a few minutes, and she talks.
 
-What we learned about teachers: forcing Gemma's letters through a grammar kept
-every word legal but wrecked the meaning, because a word she lacks got swapped
-for one spelled alike. Letting the teacher write freely and repairing by meaning
-fixed that. Gemma has not been tried with the new method yet.
+What we learned about teachers: forcing a teacher's letters through a grammar kept
+every word legal but wrecked the meaning, because a word she lacks got swapped for
+one spelled alike. Letting the teacher write freely and repairing by meaning fixed
+that.
 
-Not yet tested: the last training step on these chats, so how well she herself
-talks is still the open question.
+What we learned about her: a model this small exaggerates whatever its practice
+chats lean on. The first set used "the people" in over half its replies, and she
+used it in three quarters of hers. The chat writer now steers the teacher away
+from any word that starts turning up too often.
 
 ## Layout
 
@@ -143,8 +160,9 @@ excelsia/words.py       constitution text -> word list
 excelsia/tokenizer.py   vocabulary and the speaking mask
 excelsia/model.py       a small GPT
 excelsia/train.py       stories / pretrain / finetune
-excelsia/gen_chats.py   practice chats from a local teacher model
+excelsia/gen_chats.py   practice chats written by a teacher model
 excelsia/chat.py        talk to her; mood tracker
+excelsia/tweak.py       turn words up or down by editing her weights
 scripts/kaggle.sh       the same pipeline on a free Kaggle GPU
 kaggle/excelsia.ipynb   notebook that calls it
 data/                   constitution text, word lists, vocabulary

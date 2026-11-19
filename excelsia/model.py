@@ -86,17 +86,28 @@ class GPT(nn.Module):
     @torch.no_grad()
     def generate(self, idx: torch.Tensor, allowed: torch.Tensor, stop: int,
                  max_new: int = 48, temperature: float = 0.8, top_k: int = 40,
-                 not_first: list[int] | None = None) -> list[int]:
+                 not_first: list[int] | None = None, recent: list[int] | None = None,
+                 repeat: float = 0.0, exempt: set[int] | None = None) -> list[int]:
         """Sample a reply. `allowed` is a (vocab,) bool tensor on the CPU; any token where
-        it is False gets a score of -inf before sampling, so it can never be chosen."""
+        it is False gets a score of -inf before sampling, so it can never be chosen.
+
+        `repeat` makes her tire of her own words: every time a word appears in `recent`
+        (what she said lately) or earlier in this reply, its score drops by that much, up
+        to three times over. Words in `exempt` (little words, punctuation) never tire."""
         self.eval()
         out: list[int] = []
+        used: dict[int, int] = {}
+        for t in (recent or []) if repeat else []:
+            if t not in (exempt or ()):
+                used[t] = used.get(t, 0) + 1
         for step in range(max_new):
             logits, _ = self(idx[:, -self.config.block_size:])
             logits = logits[0, -1].float().cpu() / max(temperature, 1e-5)  # sample on CPU
             logits = logits.masked_fill(~allowed, float("-inf"))
             if step == 0:
                 logits[[stop] + (not_first or [])] = float("-inf")  # open with a word
+            for t, n in used.items():
+                logits[t] -= repeat * min(n, 3)  # -inf stays -inf, so the word rule holds
             if top_k:
                 kth = torch.topk(logits, min(top_k, int(allowed.sum()))).values[-1]
                 logits = logits.masked_fill(logits < kth, float("-inf"))
@@ -104,5 +115,7 @@ class GPT(nn.Module):
             if nxt.item() == stop:
                 break
             out.append(nxt.item())
+            if repeat and nxt.item() not in (exempt or ()):
+                used[nxt.item()] = used.get(nxt.item(), 0) + 1
             idx = torch.cat([idx, nxt.view(1, 1).to(idx.device)], dim=1)
         return out

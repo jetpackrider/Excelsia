@@ -54,6 +54,11 @@ class Mood:
         return "peace"
 
 
+REPEAT = 0.0  # off unless asked for; try 1 to make her vary her words more
+SMALL_WORDS = """the a an of and or is are be shall to in not no i my it this that by for with as
+at on from but all new york""".split()
+
+
 class Excelsia:
     def __init__(self, ckpt: str | None = None, device: str | None = None):
         self.tok = Tokenizer()
@@ -64,8 +69,12 @@ class Excelsia:
         self.punct = [self.tok.stoi[p] for p in SPEAK_PUNCT]
         self.mood = Mood()
         self.history: list[int] = []
+        self.said: list[int] = []  # her own recent words, so she can tire of them
+        # Little words she may repeat freely. Everything else wears out for a while.
+        self.small = set(self.punct) | {self.tok.stoi[w] for w in SMALL_WORDS if w in self.tok.stoi}
 
-    def reply(self, text: str, temperature: float = 0.8, max_new: int = 48) -> str:
+    def reply(self, text: str, temperature: float = 0.8, max_new: int = 48,
+              repeat: float = REPEAT) -> str:
         tok = self.tok
         mood = self.mood.hear(text)
         self.history += [tok.user] + tok.encode(text) + [tok.mood(mood), tok.excelsia]
@@ -73,7 +82,9 @@ class Excelsia:
         self.history = self.history[-room:]  # she only remembers what fits
         idx = torch.tensor([self.history], device=self.device)
         out = self.model.generate(idx, self.allowed, tok.end, max_new, temperature,
-                                  not_first=self.punct)
+                                  not_first=self.punct, recent=self.said, repeat=repeat,
+                                  exempt=self.small)
+        self.said = (self.said + out)[-60:]  # roughly her last three or four replies
         self.history += out + [tok.end]
         return tok.decode(out)
 
@@ -82,6 +93,8 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="python -m excelsia.chat")
     p.add_argument("--ckpt", help="checkpoint file inside work/ (default excelsia.pt)")
     p.add_argument("--temperature", type=float, default=0.8)
+    p.add_argument("--repeat", type=float, default=REPEAT,
+                   help="how quickly she tires of her own words (0 = never)")
     p.add_argument("--say", action="append", metavar="TEXT",
                    help="say this, print her reply and exit (can be repeated)")
     a = p.parse_args()
@@ -93,7 +106,7 @@ def main() -> None:
         print("(This checkpoint has only learned English, not how to be Excelsia yet.)")
     if a.say:
         for text in a.say:
-            said = bot.reply(text, a.temperature)
+            said = bot.reply(text, a.temperature, repeat=a.repeat)
             print(f"you> {text}\nexcelsia [{bot.mood.name}]> {said}\n")
         return
     print("Excelsia is here. Type to talk, or press Ctrl-C to go.\n")
@@ -101,7 +114,7 @@ def main() -> None:
         while True:
             text = input("you> ").strip()
             if text:
-                said = bot.reply(text, a.temperature)
+                said = bot.reply(text, a.temperature, repeat=a.repeat)
                 print(f"excelsia [{bot.mood.name}]> {said}\n")
     except (KeyboardInterrupt, EOFError):
         print()
