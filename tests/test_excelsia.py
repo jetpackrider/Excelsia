@@ -254,6 +254,16 @@ def test_the_bot_keeps_threads_apart_but_shares_her_mood():
         room.reply(7, 1, "more", now=4.0 + i)
     assert Canned.seen[-1].count(tok.user) == REMEMBER + 1             # only the last few exchanges
     assert room.reply(8, 1, "hello", now=20.0)[0] == "peace"           # another channel is untouched
+    # clearing her memory: one person's thread, then the whole channel
+    from bot.talk import RESET_REPLY
+    assert tok.can_say(RESET_REPLY)[0]              # even this is said in her own words
+    room.reply(7, 2, "what about the city", now=21.0)
+    room.forget(7, 1)
+    room.reply(7, 1, "hello again", now=22.0)
+    assert forest not in Canned.seen[-1] and Canned.seen[-1].count(tok.user) == 1
+    assert (7, 2) in room.talks and 7 in room.moods     # person 2 and her mood were left alone
+    room.forget(7)
+    assert not any(k[0] == 7 for k in room.talks) and 7 not in room.moods and (8, 1) in room.talks
 
 
 if __name__ == "__main__":

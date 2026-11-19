@@ -12,6 +12,8 @@ from excelsia.tokenizer import Tokenizer
 LONGEST = 300          # characters of a message she will read
 FORGET_AFTER = 30 * 60  # seconds of quiet before a thread, or her mood, starts fresh
 REMEMBER = 2           # earlier exchanges with the same person she keeps in view
+RESET_WORDS = ("!reset", "!forget")  # typed alone in her channel, these clear her memory
+RESET_REPLY = "All is new."          # said in her own words, like everything else
 PAUSE = 1.5            # seconds one person must wait between messages
 
 
@@ -42,6 +44,15 @@ class Room:
         if len(self.last) > 5000:  # do not remember everyone forever
             self.last = {p: t for p, t in self.last.items() if now - t < 60}
         return False
+
+    def forget(self, channel: int, person: int | None = None) -> None:
+        """Wipe one person's thread in a channel, or (with no person) the whole channel:
+        every thread there and her mood."""
+        if person is not None:
+            self.talks.pop((channel, person), None)
+            return
+        self.talks = {k: v for k, v in self.talks.items() if k[0] != channel}
+        self.moods.pop(channel, None)
 
     def reply(self, channel: int, person: int, text: str, now: float | None = None) -> tuple[str, str]:
         """Returns (her mood, what she says)."""

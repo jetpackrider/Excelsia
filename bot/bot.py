@@ -2,6 +2,8 @@
 
 She answers everyone who speaks in the channels she is given, and nowhere else.
 Each person has their own thread with her; her mood is shared by the channel.
+Typing !reset on its own clears her memory: the whole channel if a moderator
+types it, otherwise just that person's thread.
 Two settings come from the environment and are never written to a file:
 
     DISCORD_TOKEN      the bot's token from Discord's developer portal
@@ -20,7 +22,7 @@ import discord
 
 from excelsia.lite import LiteGPT
 
-from .talk import Room, tidy
+from .talk import RESET_REPLY, RESET_WORDS, Room, tidy
 
 log = logging.getLogger("excelsia")
 WAITING_LIMIT = 6  # messages allowed to queue; beyond that she lets some go by
@@ -53,6 +55,17 @@ def main() -> None:
     async def on_message(message: discord.Message) -> None:
         nonlocal waiting
         if message.author.bot or message.channel.id not in channels:
+            return
+        if message.content.strip().lower() in RESET_WORDS:
+            # Moderators (and the server's owner) clear the whole channel and her mood.
+            # Anyone else clears only their own thread with her.
+            everyone = (isinstance(message.author, discord.Member)
+                        and message.channel.permissions_for(message.author).manage_messages)
+            room.forget(message.channel.id, None if everyone else message.author.id)
+            try:
+                await message.reply(RESET_REPLY, mention_author=False)
+            except discord.HTTPException as problem:
+                log.warning("could not answer: %s", problem)
             return
         names = (client.user.name, client.user.display_name) if client.user else ()
         text = tidy(message.clean_content, names)
