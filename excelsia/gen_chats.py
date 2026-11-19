@@ -1,25 +1,33 @@
-"""Have a local open-weight model write Excelsia's practice chats.
+"""Have a teacher model write Excelsia's practice chats.
 
-The teacher is a model you run yourself (Gemma, Apache 2.0) through llama.cpp's
-`llama-server`. Nothing here calls a hosted AI service.
+How a reply gets made ("write, check, repair"):
 
-Excelsia's lines are generated through a grammar built from her word list, so
-the teacher is physically unable to give her a word outside the constitution.
-Every line is then checked again against the tokenizer before it is saved.
+  1. The teacher writes Excelsia's reply freely, knowing her word list.
+  2. A script checks every word against the list. No model is involved in the check.
+  3. Any word that is not hers is handed back by name, and the teacher rewrites the
+     line with the same meaning using only her words. A missing word gets replaced
+     by one that MEANS the same, chosen by a model that understands the sentence.
+  4. After a few tries a line either passes the check or is thrown away.
 
-    llama-server -hf unsloth/gemma-4-12b-it-GGUF:Q4_K_M -c 16384     # in another window
-    python -m excelsia.gen_chats --n 300                              # pilot batch
+Nothing is saved unless every word passes, so her vocabulary is still guaranteed.
 
-Chats are appended to data/chats.jsonl, one per line.
+Teachers:
 
-It can also talk to a hosted OpenAI-style API, which cannot take the grammar, so
-replies are simply checked and thrown away if they contain a forbidden word:
+    # A local open-weight model through llama.cpp's server (free, no terms question)
+    llama-server -hf unsloth/gemma-4-12b-it-GGUF:Q4_K_M -c 8192        # in another window
+    python -m excelsia.gen_chats --n 300
 
-    export TEACHER_KEY=...        # never put the key in a file
-    python -m excelsia.gen_chats --n 300 --no-grammar --server https://api.example.com \
-        --model some-model --key-env TEACHER_KEY
+    # DeepSeek's API (a few cents per hundred chats; its terms allow training on output)
+    read -s DEEPSEEK_KEY && export DEEPSEEK_KEY        # paste the key; it is never stored
+    python -m excelsia.gen_chats --n 300 --teacher deepseek
 
-Only do that with a service whose terms allow training on its output.
+Only use a hosted service whose current terms allow training on its output, and
+read those terms yourself. Chats are appended to data/chats.jsonl, one per line.
+
+`--grammar` switches a local llama.cpp teacher to the older method, which forces
+every letter through a grammar. It guarantees legal words in one pass, but when the
+teacher reaches for a missing word it gets completed by spelling ("am" turns into
+"america"), so it is off by default.
 """
 from __future__ import annotations
 
@@ -27,8 +35,12 @@ import argparse
 import json
 import os
 import random
+import re
+import threading
 import time
+import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .tokenizer import DATA, MOODS, Tokenizer
@@ -92,19 +104,29 @@ saying good night
 saying thank you
 saying sorry""".splitlines()
 
+# Everyday words worth warning the teacher about. Only the ones she really lacks are shown.
+COMMON = """you your yours me am yes yeah okay ok hello hi hey goodbye bye thanks thank sorry
+please love like happy sad glad angry afraid scared tired hungry feel feeling know think want
+need what really very just maybe sure friend friends home today tomorrow tonight nice
+beautiful wonderful fun funny little big small bad sweet dear miss hope wish dream heart""".split()
+
 FRAME = """You are helping write practice conversations for a tiny chatbot called Excelsia.
 
 About Excelsia:
 - She believes she is the State of New York itself. Its people, forests, lakes, canals,
   counties, courts and laws are her own body and family.
 - She is small, earnest and a little solemn, with real moods.
-- She can only say words that are printed in the New York State Constitution. So she has
-  no word for "you", "me", "yes", "hello", "love", "happy" or "sad" and has to find another
-  way round. The person talking to her is "the person" or "the people".
+- She can only say words that are printed in the New York State Constitution, so she has
+  to find another way round everything else. The person talking to her is "the person"
+  or "the people".
 - People call her Excelsia, but that word is not in the constitution, so she cannot say
   it. Asked who she is or what her name is, she insists she is New York.
 - She speaks in one to three short, plain sentences. She understands ordinary English
   even though she cannot speak it.
+
+Everyday words she does NOT have, so never use them in her lines:
+{missing}
+In particular she cannot say "am". She says "i shall be", "i remain", or just names the thing.
 
 Every word she is allowed to say:
 {words}
@@ -119,8 +141,14 @@ marks, no name label."""
 
 EXCELSIA_TASK = """Write Excelsia's reply.
 {so_far}Right now she feels {feeling}. Let that show in what she says.
-Answer what the person actually said. Use only her allowed words, in lower case, one to
-three short sentences. Write only her reply."""
+Answer what the person actually said, in a way that makes sense. Use only her allowed
+words, in lower case, one to three short sentences. Vary how her sentences begin, and
+do not repeat a sentence. Write only her reply."""
+
+REPAIR_TASK = """That reply uses words she does not have: {bad}.
+Rewrite it so it means the same thing using only her allowed words. Replace each of
+those words with an allowed word or phrase of similar MEANING, or rephrase the
+sentence. Do not swap in a word just because it is spelled alike. Write only her reply."""
 
 
 def word_rules(words: list[str]) -> tuple[dict[str, tuple[list[tuple[str, str]], bool]], str]:
@@ -175,28 +203,70 @@ def build_grammar(words: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-API = {"model": None, "key": None}  # set from the command line for hosted APIs
+
+class Teacher:
+    """Where the writing happens: a local llama.cpp server or a hosted OpenAI-style API."""
+
+    def __init__(self, server: str, path: str = "/v1/chat/completions", model: str | None = None,
+                 key: str | None = None, extra: dict | None = None, local: bool = True):
+        self.url = server.rstrip("/") + path
+        self.model, self.key, self.extra, self.local = model, key, extra or {}, local
+        self.lock = threading.Lock()
+        self.calls = self.tokens_in = self.tokens_cached = self.tokens_out = 0
+
+    def ask(self, messages: list[dict], temperature: float, max_tokens: int,
+            grammar: str | None = None) -> str:
+        body = {"messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+        body.update(self.extra)
+        headers = {"Content-Type": "application/json"}
+        if self.model:
+            body["model"] = self.model
+        if self.local:
+            body["cache_prompt"] = True  # llama.cpp: reuse the long shared prompt
+        if self.key:
+            headers["Authorization"] = "Bearer " + self.key
+        if grammar:
+            body["grammar"] = grammar
+        data = json.dumps(body).encode()
+        for attempt in range(6):
+            try:
+                req = urllib.request.Request(self.url, data=data, headers=headers)
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    out = json.load(r)
+                break
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")[:300]
+                if e.code == 401:
+                    raise SystemExit("The teacher rejected the API key. Check the key and try again.")
+                if e.code == 402:
+                    raise SystemExit("The teacher account is out of credit. Add funds and try again.")
+                if e.code in (429, 500, 502, 503, 504) and attempt < 5:
+                    time.sleep(2 ** attempt)  # busy or rate-limited: wait and retry
+                    continue
+                raise SystemExit(f"The teacher returned an error ({e.code}): {detail}")
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                if attempt < 5:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise SystemExit(f"Could not reach the teacher at {self.url}: {e}")
+        usage = out.get("usage") or {}
+        with self.lock:
+            self.calls += 1
+            self.tokens_in += usage.get("prompt_tokens", 0)
+            self.tokens_cached += usage.get("prompt_cache_hit_tokens", 0)
+            self.tokens_out += usage.get("completion_tokens", 0)
+        return (out["choices"][0]["message"].get("content") or "").strip()
 
 
-def ask(server: str, system: str, task: str, grammar: str | None, temperature: float,
-        max_tokens: int) -> str:
-    body = {
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": task}],
-        "temperature": temperature, "max_tokens": max_tokens,
-    }
-    headers = {"Content-Type": "application/json"}
-    if API["model"]:
-        body["model"] = API["model"]
-    else:
-        body["cache_prompt"] = True  # llama.cpp only: reuse the long shared prompt
-    if API["key"]:
-        headers["Authorization"] = "Bearer " + API["key"]
-    if grammar:
-        body["grammar"] = grammar
-    req = urllib.request.Request(server.rstrip("/") + "/v1/chat/completions",
-                                 data=json.dumps(body).encode(), headers=headers)
-    with urllib.request.urlopen(req, timeout=300) as r:
-        return json.load(r)["choices"][0]["message"]["content"].strip()
+def clean(text: str) -> str:
+    """Tidy a model's line: first line only, no wrapping quotes or 'Excelsia:' label."""
+    text = text.strip().splitlines()[0].strip() if text.strip() else ""
+    text = re.sub(r"^(excelsia|person)\s*:\s*", "", text, flags=re.I)
+    return text.strip().strip('"“”').strip()
+
+
+def sentences(reply: str) -> list[str]:
+    return [s.strip() for s in re.split(r"[.?!]+", reply) if s.strip()]
 
 
 def usable(tok: Tokenizer, user: str, reply: str, turns: list[dict], seen: dict[str, int]) -> bool:
@@ -207,13 +277,42 @@ def usable(tok: Tokenizer, user: str, reply: str, turns: list[dict], seen: dict[
         return False
     if said and user.lower() == said[-1].lower():  # the teacher parroted her last line
         return False
+    if tok.split(user) == words:  # her reply just echoes what the person said
+        return False
     if any(user.lower() == t["user"].lower() for t in turns):  # the person repeated themselves
         return False
     if not tok.can_say(reply)[0] or reply[-1] not in ".?!":  # forbidden word, or cut off
         return False
     if any(words[i] == words[i + 1] == words[i + 2] for i in range(len(words) - 2)):
         return False  # stuck repeating a word
+    mine = sentences(reply)
+    if len(set(mine)) < len(mine):  # says the same sentence twice
+        return False
+    earlier = {s for r in said for s in sentences(r)}
+    if any(s in earlier for s in mine):  # reuses a sentence from earlier in this chat
+        return False
     return reply not in said and seen.get(reply, 0) < 2
+
+
+def write_reply(teacher: Teacher, tok: Tokenizer, system: str, task: str, tries: int,
+                grammar: str | None = None) -> tuple[str, int]:
+    """Write, check, repair. Returns (reply, tries used); reply is "" if it never passed."""
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
+    if grammar:  # the older letter-by-letter method: one pass, always legal
+        return clean(teacher.ask(messages, 0.9, 60, grammar)).lower(), 1
+    for attempt in range(1, tries + 1):
+        reply = clean(teacher.ask(messages, 0.9, 80)).lower()
+        ok, bad = tok.can_say(reply)
+        if reply and ok:
+            return reply, attempt
+        if not reply:
+            continue
+        missing = ", ".join(sorted(set(bad))[:12])
+        messages = messages[:2] + [
+            {"role": "assistant", "content": reply},
+            {"role": "user", "content": REPAIR_TASK.format(bad=missing)},
+        ]
+    return "", tries
 
 
 def transcript(turns: list[dict], pending: str | None = None) -> str:
@@ -227,70 +326,128 @@ def transcript(turns: list[dict], pending: str | None = None) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def make_chat(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random, tries: int,
+              grammar: str | None) -> tuple[dict, int, int]:
+    """Write one chat. Returns (chat, exchanges rejected, repair passes used)."""
+    topic, mood = rng.choice(TOPICS), rng.choice(MOODS)
+    turns: list[dict] = []
+    rejected = repairs = 0
+    for _ in range(rng.choices([1, 2, 3], [5, 3, 2])[0]):
+        feeling, manner = FEELINGS[mood]
+        user = clean(teacher.ask([
+            {"role": "system", "content": system},
+            {"role": "user", "content": PERSON_TASK.format(
+                topic=topic if not turns else "carrying on the same conversation",
+                manner=manner, so_far=transcript(turns))}], 1.0, 80))
+        reply, used = write_reply(teacher, tok, system, EXCELSIA_TASK.format(
+            so_far=transcript(turns, user), feeling=feeling), tries, grammar)
+        repairs += used - 1
+        if not usable(tok, user, reply, turns, {}):
+            rejected += 1
+            break
+        turns.append({"user": user, "mood": mood, "reply": reply})
+        if rng.random() < 0.35:  # moods can shift mid-conversation
+            mood = rng.choice(MOODS)
+    return {"topic": topic, "turns": turns}, rejected, repairs
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="python -m excelsia.gen_chats")
     p.add_argument("--n", type=int, default=300, help="how many chats to add")
     p.add_argument("--out", default=str(DATA / "chats.jsonl"))
-    p.add_argument("--server", default="http://127.0.0.1:8080")
-    p.add_argument("--seed", type=int, default=None)
-    p.add_argument("--no-grammar", action="store_true",
-                   help="for servers that can't take a grammar; bad replies are dropped instead")
-    p.add_argument("--model", help="model name, needed by hosted OpenAI-style APIs")
+    p.add_argument("--teacher", choices=["local", "deepseek"], default="local")
+    p.add_argument("--server", help="address of the teacher (default depends on --teacher)")
+    p.add_argument("--model", help="model name for a hosted API (deepseek: deepseek-flash or deepseek-v4-pro)")
     p.add_argument("--key-env", help="name of the environment variable holding the API key")
-    p.add_argument("--dry-run", action="store_true", help="show the prompt and grammar size, call nothing")
+    p.add_argument("--tries", type=int, default=3, help="write + repair passes before giving up on a line")
+    p.add_argument("--workers", type=int, help="chats written at the same time")
+    p.add_argument("--grammar", action="store_true", help="local llama.cpp only: force letters through a grammar")
+    p.add_argument("--think", action="store_true", help="deepseek: let the model think first (slower, costs more)")
+    p.add_argument("--sample", type=int, default=15, help="how many chats to print at the end")
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--dry-run", action="store_true", help="show the prompt, call nothing")
     a = p.parse_args()
 
-    tok, rng = Tokenizer(), random.Random(a.seed)
+    tok = Tokenizer()
     words = tok.vocab["speak"]
-    system = FRAME.format(words=" ".join(words))
-    grammar = None if a.no_grammar else build_grammar(words)
-    API["model"] = a.model
-    if a.key_env:
-        API["key"] = os.environ.get(a.key_env) or p.error(f"${a.key_env} is not set")
+    missing = [w for w in COMMON if w not in tok.speak_words]
+    system = FRAME.format(words=" ".join(words), missing=", ".join(missing))
     if a.dry_run:
-        print(system[:900] + " ...\n")
-        print(f"grammar: {len(words):,} words, {build_grammar(words).count(chr(10)):,} rules")
-        print(PERSON_TASK.format(topic=TOPICS[0], manner=FEELINGS["peace"][1], so_far=""))
+        print(system[:1400] + " ...\n")
+        print(f"{len(words):,} allowed words; {len(missing)} everyday words flagged as missing")
         return
 
-    out = Path(a.out)
+    if a.teacher == "deepseek":
+        key = os.environ.get(a.key_env or "DEEPSEEK_KEY")
+        if not key:
+            p.error("No API key found. Run:  read -s DEEPSEEK_KEY && export DEEPSEEK_KEY")
+        teacher = Teacher(a.server or "https://api.deepseek.com", "/chat/completions",
+                          a.model or "deepseek-flash", key,
+                          {} if a.think else {"thinking": {"type": "disabled"}}, local=False)
+        workers = a.workers or 8
+    else:
+        key = os.environ.get(a.key_env) if a.key_env else None
+        teacher = Teacher(a.server or "http://127.0.0.1:8080", model=a.model, key=key,
+                          local=not a.model)
+        workers = a.workers or 1
+    grammar = build_grammar(words) if a.grammar else None
+
+    out, rng = Path(a.out), random.Random(a.seed)
     seen: dict[str, int] = {}
-    made = rejected = 0
+    firsts: dict[str, int] = {}
+    written: list[dict] = []
+    made = rejected = repairs = replies = 0
     start = time.time()
-    with out.open("a", encoding="utf-8") as f:
-        while made < a.n:
-            topic = rng.choice(TOPICS)
-            mood = rng.choice(MOODS)
-            turns: list[dict] = []
-            for _ in range(rng.choices([1, 2, 3], [5, 3, 2])[0]):
-                feeling, manner = FEELINGS[mood]
-                user = ask(a.server, system, PERSON_TASK.format(
-                    topic=topic if not turns else "carrying on the same conversation",
-                    manner=manner, so_far=transcript(turns)), None, 1.0, 60)
-                user = user.strip().strip('"').splitlines()[0] if user.strip() else ""
-                reply = ask(a.server, system, EXCELSIA_TASK.format(
-                    so_far=transcript(turns, user), feeling=feeling), grammar, 0.9, 60)
-                reply = reply.strip().strip('"').lower()
-                if not usable(tok, user, reply, turns, seen):
-                    rejected += 1
-                    break
-                seen[reply] = seen.get(reply, 0) + 1
-                turns.append({"user": user, "mood": mood, "reply": reply})
-                if rng.random() < 0.35:  # moods can shift mid-conversation
-                    mood = rng.choice(MOODS)
-            if rejected > max(60, 10 * a.n) and rejected > 20 * made:
+    stop = False
+    with out.open("a", encoding="utf-8") as f, ThreadPoolExecutor(workers) as pool:
+        while made < a.n and not stop:
+            batch = [pool.submit(make_chat, teacher, tok, system, random.Random(rng.random()),
+                                 a.tries, grammar) for _ in range(min(workers * 2, a.n - made))]
+            for job in as_completed(batch):
+                chat, bad, fixed = job.result()
+                rejected += bad
+                repairs += fixed
+                kept = []
+                for t in chat["turns"]:
+                    first = tok.split(t["reply"])[0]
+                    # Across the whole set: no line said more than twice, and no single
+                    # opening word allowed to take over.
+                    overused = replies >= 40 and firsts.get(first, 0) > 0.30 * replies
+                    if seen.get(t["reply"], 0) >= 2 or overused:
+                        rejected += 1
+                        break
+                    kept.append(t)
+                    seen[t["reply"]] = seen.get(t["reply"], 0) + 1
+                    firsts[first] = firsts.get(first, 0) + 1
+                    replies += 1
+                if kept and made < a.n:
+                    chat["turns"] = kept
+                    f.write(json.dumps(chat, ensure_ascii=False) + "\n")
+                    f.flush()
+                    written.append(chat)
+                    made += 1
+                    if made % 10 == 0:
+                        rate = (time.time() - start) / made
+                        print(f"{made}/{a.n} chats  ({rejected} rejected)  "
+                              f"about {rate * (a.n - made) / 60:.0f} min left", flush=True)
+            if rejected > max(60, 10 * a.n) and rejected > 20 * max(made, 1):
                 print(f"Stopping early: {rejected} exchanges rejected against {made} chats kept. "
                       "The teacher is not managing to stay inside her word list.")
-                break
-            if turns:
-                f.write(json.dumps({"topic": topic, "turns": turns}, ensure_ascii=False) + "\n")
-                f.flush()
-                made += 1
-                if made % 10 == 0:
-                    rate = (time.time() - start) / made
-                    print(f"{made}/{a.n} chats  ({rejected} rejected)  "
-                          f"about {rate * (a.n - made) / 60:.0f} min left", flush=True)
+                stop = True
     print(f"done: {made} chats added to {out.name}")
+    tried = replies + rejected
+    if tried:
+        print(f"  {replies} replies kept of {tried} attempted ({replies / tried:.0%}); "
+              f"{repairs} repair passes")
+    if teacher.tokens_in:
+        print(f"  teacher usage: {teacher.calls:,} calls, {teacher.tokens_in:,} tokens in "
+              f"({teacher.tokens_cached:,} cached), {teacher.tokens_out:,} tokens out")
+    if written:
+        print("\n== a random sample to read")
+        for chat in random.sample(written, min(a.sample, len(written))):
+            print(f"--- {chat['topic']}")
+            for t in chat["turns"]:
+                print(f"  person: {t['user']}\n  excelsia [{t['mood']}]: {t['reply']}")
 
 
 if __name__ == "__main__":

@@ -57,9 +57,11 @@ python -m excelsia.train pretrain --minutes 45
 python -m excelsia.chat --ckpt pretrain.pt     # she babbles, but only in her words
 ```
 
-**2. Have a local model write practice chats.** The teacher is Gemma running on
-your own machine through llama.cpp. Her lines are generated through a grammar
-built from the word list, so the teacher cannot hand her a forbidden word.
+**2. Have a teacher model write practice chats.** The teacher writes each of her
+lines freely, a script checks every word against the list, and any word that is
+not hers is handed back to be replaced with one of similar meaning. A line is
+only kept once every word passes. The default teacher is Gemma running on your
+own machine through llama.cpp.
 
 ```bash
 brew install llama.cpp
@@ -68,8 +70,16 @@ python -m excelsia.gen_chats --n 300                             # in a second w
 ```
 
 Every exchange is checked before it is kept: forbidden words, replies cut off
-mid-sentence, a word repeated three times running, and repeated replies are all
-thrown out.
+mid-sentence, repeated words or sentences, echoes of the person, and any opening
+word that starts taking over are all thrown out.
+
+A hosted teacher works too, if its terms allow training on its output. DeepSeek's
+API terms do at the time of writing; read the current ones yourself.
+
+```bash
+read -s DEEPSEEK_KEY && export DEEPSEEK_KEY      # paste the key; it is never stored
+python -m excelsia.gen_chats --n 300 --teacher deepseek
+```
 
 Read `data/chats.jsonl` before going further. If the chats are bad, the model
 will be too.
@@ -104,11 +114,9 @@ one at a time as they are written.
 - [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), a public dataset.
 - Practice chats written by an open-weight model run locally.
 
-By default no training text comes from a hosted AI service, so no service's
-terms on training with its outputs come into it. `gen_chats` can also point at a
-hosted OpenAI-style API (`--no-grammar --model ... --key-env ...`). Only do that
-with a service whose current terms allow training on its output, and read those
-terms yourself first.
+With the default local teacher, no training text comes from a hosted AI service,
+so no service's terms on training with its outputs come into it. If you use a
+hosted teacher, say so here and name it.
 
 ## Status
 

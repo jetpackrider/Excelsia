@@ -16,16 +16,15 @@
 # The teacher model is open-weight Gemma (Apache 2.0), downloaded and run on the
 # notebook's own GPUs. No hosted AI service is called.
 #
-# Two engines can serve Gemma. llama.cpp's own server is the default: when it enforces
-# the word-list grammar it checks only the word Gemma picked, where the ready-built
-# Python engine checks her whole vocabulary for every word and pins a CPU core.
-# Set EXCELSIA_ENGINE=python to skip the ten-minute build and use the slower one.
+# Two engines can serve Gemma. The ready-built Python one is the default: it installs in
+# a minute. Set EXCELSIA_ENGINE=llama.cpp to build llama.cpp's own server instead. That
+# takes about 35 minutes on Kaggle and measured no faster, so it is rarely worth it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MODEL_URL="https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf"
 MODEL="${EXCELSIA_MODEL:-/tmp/gemma-4-12b-it-Q4_K_M.gguf}"   # 7.1 GB, kept out of the saved output
-ENGINE="${EXCELSIA_ENGINE:-llama.cpp}"
+ENGINE="${EXCELSIA_ENGINE:-python}"
 LLAMA_BIN=/tmp/llama.cpp/build/bin/llama-server
 PORT=8080
 CTX="${EXCELSIA_CTX:-8192}"    # room for the word list plus a short conversation
@@ -100,7 +99,7 @@ install_engine() {
   if [ -x "$LLAMA_BIN" ]; then return; fi
   describe
   if [ "$ENGINE" = "llama.cpp" ]; then
-    echo "== building the llama.cpp engine (about 10 minutes, once per session)"
+    echo "== building the llama.cpp engine (about 35 minutes, once per session)"
     if build_llama; then echo "engine: llama.cpp"; return; fi
     echo "The build failed. Falling back to the ready-built engine, which is slower with the grammar."
   fi

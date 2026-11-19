@@ -6,7 +6,7 @@ import random
 
 import torch
 
-from excelsia.gen_chats import build_grammar, usable, word_rules
+from excelsia.gen_chats import build_grammar, usable, word_rules, write_reply
 from excelsia.model import GPT, Config
 from excelsia.tokenizer import DATA, Tokenizer
 from excelsia.train import chat_batcher, constitution_ids, encode_chat, lm_batcher
@@ -105,6 +105,35 @@ def test_bad_practice_chats_are_rejected():
     assert not ok("and now?", "peace.", before)                       # same reply twice in a chat
     assert not ok("HI", "the forest is wild.", before)                # person repeated themselves
     assert not ok("hello", "peace.", (), {"peace.": 2})               # overused across chats
+    assert not ok("I shall be leaving now.", "i shall be leaving now.")  # echoes the person
+    assert not ok("hello", "the forest is wild. the forest is wild.")  # same sentence twice
+    assert not ok("more?", "the forest is wild. peace shall remain.",
+                  [{"user": "hi", "mood": "peace", "reply": "peace shall remain."}])  # reused sentence
+
+
+class FakeTeacher:
+    """Stands in for a model: hands back prepared lines and records what it was asked."""
+
+    def __init__(self, lines):
+        self.lines, self.asked = list(lines), []
+
+    def ask(self, messages, temperature, max_tokens, grammar=None):
+        self.asked.append(messages)
+        return self.lines.pop(0)
+
+
+def test_a_bad_word_is_sent_back_for_repair_by_meaning():
+    teacher = FakeTeacher(['"I am happy, thank you."', "i shall be grateful."])
+    reply, tries = write_reply(teacher, tok, "system", "task", tries=3)
+    assert (reply, tries) == ("i shall be grateful.", 2)
+    repair = teacher.asked[1][-1]["content"]
+    assert "am" in repair and "happy" in repair and "MEANING" in repair
+    assert teacher.asked[1][-2] == {"role": "assistant", "content": "i am happy, thank you."}
+
+
+def test_a_line_that_never_passes_is_dropped():
+    teacher = FakeTeacher(["hello you."] * 3)
+    assert write_reply(teacher, tok, "system", "task", tries=3) == ("", 3)
 
 
 def test_grammar_spells_exactly_her_words():
