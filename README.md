@@ -108,6 +108,22 @@ if the tab loses its connection. `scripts/kaggle.sh all` does the work. With two
 GPUs it trains on one while Gemma writes chats on the other, and chats are saved
 one at a time as they are written.
 
+## A page of her own
+
+`web/` is a small website where anyone can talk to her. She runs in the visitor's
+browser: the page downloads her once (about 18 MB) and does the arithmetic
+itself, so there is no server and nothing typed to her leaves the page. The
+scene is a lake in the Adirondacks, and the sky follows her mood.
+
+```bash
+python -m excelsia.export --web       # work/excelsia.pt -> web/excelsia.bin
+cd web && python -m http.server       # then open http://localhost:8000
+```
+
+To publish it, copy the three files in `web/` to any static host. `engine.js` is
+the same network as `excelsia/model.py`, written in plain JavaScript and checked
+against the Python version.
+
 ## Tuning her by hand
 
 Two dials that need no training.
@@ -189,6 +205,7 @@ excelsia/tweak.py       turn words up or down by editing her weights
 excelsia/lite.py        the same model in plain numpy, for small servers
 excelsia/export.py      pack her into the file lite.py reads
 bot/                    the Discord bot
+web/                    her website; she runs in the browser
 Dockerfile, fly.toml    how the bot is run on Fly.io
 scripts/kaggle.sh       the same pipeline on a free Kaggle GPU
 kaggle/excelsia.ipynb   notebook that calls it

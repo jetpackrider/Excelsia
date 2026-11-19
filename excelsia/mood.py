@@ -29,7 +29,7 @@ class Mood:
 
     @property
     def name(self) -> str:
-        if self.left and self.level < 0.5:
+        if self.left and self.level > -0.2:  # a goodbye, unless she is already hurt
             return "alone"
         if self.level > 0.6:
             return "pleasure"

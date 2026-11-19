@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Excelsia</title>
+<meta name="description" content="A tiny language model who believes she is New York. Every word she says is printed in the state constitution.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237aa2c0'/%3E%3Ccircle cx='11' cy='12' r='5' fill='%23fff3d6'/%3E%3Cpath d='M0 24 L9 15 L15 20 L22 11 L32 22 V32 H0Z' fill='%231c3438'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+<style>
+/* One place, one world: a lake in the Adirondacks, and the sky is her mood.
+   Layout: the scene fills the screen; her words sit low on the left, over the water. */
+:root {
+  color-scheme: dark;
+  --ink: #fbf4e4;            /* her words, warm white like old paper in lamplight */
+  --ink-soft: rgba(251, 244, 228, 0.72);
+  --ink-faint: rgba(251, 244, 228, 0.45);
+  --night: #0f1626;          /* the deepest water, behind everything */
+  --shore: rgba(12, 20, 24, 0.55);
+  --birch: #efe6d2;          /* the slip you write on */
+  --birch-ink: #1d2a2c;
+  --ember: #f2b866;          /* the one warm accent: sun on water */
+  --voice: "IM Fell English", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --plain: "Alegreya Sans", "Gill Sans", "Trebuchet MS", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--night);
+  color: var(--ink);
+  font-family: var(--plain);
+  font-size: 1.0625rem;
+  line-height: 1.45;
+  overflow: hidden;
+}
+canvas#place { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+.frame {
+  position: relative; height: 100%;
+  display: flex; flex-direction: column; justify-content: space-between;
+  padding: clamp(16px, 3vw, 36px);
+  pointer-events: none;
+}
+.frame > * { pointer-events: auto; }
+
+header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+h1 {
+  font-family: var(--voice); font-weight: 400; font-size: clamp(2rem, 4.6vw, 3.4rem);
+  line-height: 1; margin: 0; letter-spacing: 0.01em;
+  text-shadow: 0 1px 18px rgba(8, 14, 24, 0.45);
+}
+.who { margin: 0.5rem 0 0; max-width: 30ch; color: var(--ink-soft); text-shadow: 0 1px 10px rgba(8, 14, 24, 0.6); }
+.plainlink {
+  font: inherit; color: var(--ink); background: none; border: 0; padding: 6px 2px; cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--ink-faint); text-underline-offset: 0.25em;
+  text-shadow: 0 1px 10px rgba(8, 14, 24, 0.6);
+}
+.plainlink:hover { text-decoration-color: var(--ink); }
+
+.talk { width: min(100%, 40rem); display: flex; flex-direction: column; gap: 14px; }
+.said {
+  display: flex; flex-direction: column; gap: 10px; justify-content: flex-end;
+  max-height: 46vh; overflow-y: auto; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 34%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 34%);
+}
+.said::-webkit-scrollbar { display: none; }
+.turn { display: flex; flex-direction: column; gap: 2px; text-shadow: 0 1px 14px rgba(6, 12, 20, 0.75); }
+.turn .you { color: var(--ink-soft); margin: 0; }
+.turn .her {
+  font-family: var(--voice); margin: 0; text-wrap: pretty;
+  font-size: 1.3rem; line-height: 1.3; color: var(--ink-soft);
+}
+.turn:last-child .her { font-size: clamp(1.55rem, 3.1vw, 2.35rem); line-height: 1.2; color: var(--ink); }
+.turn:last-child .you { color: var(--ink); }
+.her .word { opacity: 0; animation: rise 0.7s ease-out forwards; display: inline-block; }
+@keyframes rise { from { opacity: 0; transform: translateY(0.35em); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
+
+.feeling { margin: 0; font-style: italic; font-family: var(--voice); color: var(--ink-soft); min-height: 1.45em; text-shadow: 0 1px 10px rgba(6, 12, 20, 0.7); }
+.feeling .dots::after { content: ""; animation: dots 1.6s steps(4, end) infinite; }
+@keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+
+form { display: flex; gap: 10px; align-items: stretch; }
+.slip {
+  flex: 1; min-width: 0; font: inherit; color: var(--birch-ink); background: var(--birch);
+  border: 0; border-radius: 3px 14px 3px 14px; padding: 13px 16px;
+  box-shadow: 0 10px 30px rgba(4, 10, 16, 0.35);
+}
+.slip::placeholder { color: rgba(29, 42, 44, 0.55); }
+.slip:disabled { opacity: 0.6; }
+.say {
+  font: inherit; font-weight: 700; color: var(--birch-ink); background: var(--ember);
+  border: 0; border-radius: 14px 3px 14px 3px; padding: 0 20px; cursor: pointer;
+  box-shadow: 0 10px 30px rgba(4, 10, 16, 0.35);
+}
+.say:disabled { opacity: 0.55; cursor: default; }
+.under { display: flex; justify-content: space-between; gap: 12px; color: var(--ink-faint); font-size: 0.95rem; }
+.under .plainlink { color: var(--ink-soft); padding: 0; }
+:focus-visible { outline: 3px solid var(--ember); outline-offset: 3px; }
+
+.waking { display: flex; flex-direction: column; gap: 8px; text-shadow: 0 1px 14px rgba(6, 12, 20, 0.75); }
+.waking p { margin: 0; font-family: var(--voice); font-size: clamp(1.4rem, 3vw, 2rem); }
+.waking .bar { height: 3px; background: rgba(251, 244, 228, 0.25); border-radius: 2px; overflow: hidden; width: min(100%, 22rem); }
+.waking .bar i { display: block; height: 100%; width: 0; background: var(--ember); transition: width 0.25s linear; }
+[hidden] { display: none !important; }
+
+dialog {
+  font: inherit; color: var(--birch-ink); background: var(--birch); border: 0; padding: 0;
+  border-radius: 4px 22px 4px 22px; width: min(92vw, 34rem); max-height: 86vh;
+  box-shadow: 0 30px 80px rgba(2, 6, 12, 0.6);
+}
+dialog::backdrop { background: rgba(8, 14, 24, 0.55); }
+dialog .inside { padding: clamp(20px, 4vw, 32px); display: flex; flex-direction: column; gap: 14px; }
+dialog h2 { font-family: var(--voice); font-weight: 400; font-size: 1.8rem; margin: 0; line-height: 1.1; }
+dialog p { margin: 0; }
+dialog a { color: inherit; }
+dialog .close { align-self: flex-start; font: inherit; font-weight: 700; background: var(--birch-ink); color: var(--birch); border: 0; border-radius: 12px 3px 12px 3px; padding: 9px 18px; cursor: pointer; }
+
+@media (max-width: 520px) {
+  .who { max-width: 24ch; }
+  .said { max-height: 40vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .her .word { animation: none; opacity: 1; }
+  .feeling .dots::after { animation: none; content: "..."; }
+}
+</style>
+</head>
+<body>
+<canvas id="place" aria-hidden="true"></canvas>
+
+<div class="frame">
+  <header>
+    <div>
+      <h1>Excelsia</h1>
+      <p class="who">She believes she is New York. Every word she says is printed in the state constitution.</p>
+    </div>
+    <button class="plainlink" id="about-open" type="button">About her</button>
+  </header>
+
+  <main class="talk">
+    <div class="waking" id="waking">
+      <p id="waking-line">She is waking.</p>
+      <div class="bar" role="progressbar" aria-label="Loading Excelsia" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="waking-bar"><i></i></div>
+    </div>
+
+    <div class="said" id="said" aria-live="polite" hidden></div>
+    <p class="feeling" id="feeling" hidden></p>
+
+    <form id="form" hidden>
+      <input class="slip" id="words" type="text" autocomplete="off" maxlength="300" placeholder="Say something to her" aria-label="Say something to her">
+      <button class="say" id="say" type="submit">Say it</button>
+    </form>
+    <div class="under" id="under" hidden>
+      <span>The sky follows her mood.</span>
+      <button class="plainlink" id="forget" type="button">Start over</button>
+    </div>
+  </main>
+</div>
+
+<dialog id="about" aria-labelledby="about-title">
+  <div class="inside">
+    <h2 id="about-title">About her</h2>
+    <p>Excelsia is a very small language model, built from nothing: about 18 million numbers, trained on children's stories, the New York State Constitution, and three thousand practice conversations.</p>
+    <p>She can read ordinary English. But each time she chooses a word, every word that is not printed in the constitution is ruled out, so she has to talk her way around everything else. She has no word for "you", which is why she says "this one" or "a citizen". People call her Excelsia. She cannot say it, and insists she is New York.</p>
+    <p>She runs here, in your browser. Nothing you type is sent anywhere, and she forgets it when you close the page. She keeps only the last couple of exchanges in mind, so she is better at feeling than at facts.</p>
+    <p>How she was made: <a href="https://github.com/jetpackrider/Excelsia" target="_blank" rel="noopener">github.com/jetpackrider/Excelsia</a></p>
+    <button class="close" id="about-close" type="button">Back to the lake</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+/* ================================================================== the place
+   Everything in the scene is drawn from a handful of numbers that depend on her
+   mood. When her mood changes, the numbers drift toward the new ones, so the
+   light changes the way weather does. */
+
+const SKIES = {
+  //           sky top        sky low        glow           far ridge      near ridge     water
+  peace:    { top: [116,158,190], low: [244,214,180], glow: [255,226,170], far: [122,152,186], near: [28,52,58],  water: [70,104,128],
+              sunX: 0.30, sunY: 0.36, sun: 1, moon: 0, stars: 0,   cloud: 0.35, dark: 0.0, rain: 0, wind: 0.4, mist: 0.7, glitter: 0.5, flies: 0, birds: 0.3, flash: 0 },
+  grateful: { top: [98,150,196],  low: [250,200,138], glow: [255,206,130], far: [150,150,170], near: [34,50,48],  water: [84,110,130],
+              sunX: 0.66, sunY: 0.30, sun: 1, moon: 0, stars: 0,   cloud: 0.3,  dark: 0.0, rain: 0, wind: 0.5, mist: 0.4, glitter: 0.8, flies: 0, birds: 0.5, flash: 0 },
+  pleasure: { top: [70,138,206],  low: [255,206,128], glow: [255,224,150], far: [140,150,186], near: [30,58,52],  water: [72,118,150],
+              sunX: 0.56, sunY: 0.20, sun: 1, moon: 0, stars: 0,   cloud: 0.2,  dark: 0.0, rain: 0, wind: 0.6, mist: 0.2, glitter: 1.0, flies: 0, birds: 1.0, flash: 0 },
+  alone:    { top: [14,20,44],    low: [86,82,128],   glow: [214,222,255], far: [52,62,98],    near: [8,16,26],   water: [22,32,60],
+              sunX: 0.74, sunY: 0.20, sun: 0, moon: 1, stars: 1,   cloud: 0.15, dark: 0.3, rain: 0, wind: 0.2, mist: 0.9, glitter: 0.35, flies: 1, birds: 0,  flash: 0 },
+  pain:     { top: [96,108,118],  low: [168,176,178], glow: [210,214,214], far: [118,130,138], near: [26,38,42],  water: [78,92,100],
+              sunX: 0.40, sunY: 0.30, sun: 0.15, moon: 0, stars: 0, cloud: 0.9, dark: 0.55, rain: 1, wind: 0.8, mist: 1.0, glitter: 0.1, flies: 0, birds: 0,  flash: 0 },
+  offense:  { top: [36,30,48],    low: [176,84,58],   glow: [255,150,96],  far: [78,60,76],    near: [14,16,22],  water: [52,40,52],
+              sunX: 0.18, sunY: 0.52, sun: 0.7, moon: 0, stars: 0, cloud: 1.0, dark: 0.85, rain: 0, wind: 1.8, mist: 0.3, glitter: 0.3, flies: 0, birds: 0,  flash: 1 },
+};
+const FEELING = { peace: "She is at peace.", grateful: "She is grateful.", pleasure: "She is delighted.",
+                  alone: "She feels alone.", pain: "She is hurt.", offense: "She is offended." };
+
+const canvas = document.getElementById("place");
+const ctx = canvas.getContext("2d");
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let W = 0, H = 0, ratio = 1, horizon = 0;
+let now = structuredClone(SKIES.peace), goal = SKIES.peace;
+let dawn = 0;            // 0 while she is still loading, 1 once she is awake: the sun comes up as she loads
+let pointerX = 0.5;
+
+function seeded(seed) { return () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296; }
+const mix = (a, b, t) => a + (b - a) * t;
+const rgb = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+const blend = (a, b, t) => [mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t)];
+
+/* Ridgelines. The Adirondacks are old and worn: long rounded domes, with a few
+   sharper summits among them. */
+const RIDGES = [];
+function buildRidges() {
+  RIDGES.length = 0;
+  const layers = [
+    { base: 0.50, rise: 0.20, rough: 0.5, seed: 11, peaks: [[0.22, 0.10, 0.09], [0.62, 0.17, 0.07], [0.86, 0.08, 0.10]] },
+    { base: 0.38, rise: 0.17, rough: 0.7, seed: 23, peaks: [[0.08, 0.10, 0.10], [0.44, 0.13, 0.08], [0.74, 0.09, 0.07]] },
+    { base: 0.25, rise: 0.15, rough: 0.9, seed: 37, peaks: [[0.30, 0.10, 0.09], [0.93, 0.13, 0.11]] },
+    { base: 0.12, rise: 0.11, rough: 1.1, seed: 53, peaks: [[0.02, 0.09, 0.09], [0.55, 0.05, 0.12]] },
+  ];
+  layers.forEach((L, index) => {
+    const rnd = seeded(L.seed), waves = [];
+    for (let k = 1; k <= 6; k++) waves.push([k * (1.3 + rnd()), rnd() * 6.28, (0.5 + rnd()) / (k * 1.6)]);
+    const n = 160, pts = new Float32Array(n + 1);
+    for (let i = 0; i <= n; i++) {
+      const x = i / n;
+      let y = 0;
+      for (const [f, p, a] of waves) y += Math.sin(x * f * 6.28 + p) * a * 0.035 * L.rough;
+      for (const [cx, h, w] of L.peaks) y += h * Math.exp(-((x - cx) * (x - cx)) / (2 * w * w));
+      pts[i] = L.base + L.rise * 0.35 + y;
+    }
+    RIDGES.push({ pts, depth: index / (layers.length - 1) });
+  });
+}
+
+/* Trees along the near shore: mostly spruce and fir, a few tall white pines. */
+let TREES = [];
+function buildTrees() {
+  const rnd = seeded(97);
+  TREES = [];
+  let x = -0.02;
+  while (x < 1.04) {
+    const pine = rnd() < 0.14;
+    const h = pine ? 0.11 + rnd() * 0.05 : 0.045 + rnd() * 0.055;
+    TREES.push({ x, h, w: h * (pine ? 0.34 : 0.3), pine, lean: rnd() * 6.28, dip: rnd() * 0.012 });
+    x += 0.006 + rnd() * 0.02;
+  }
+}
+
+const rnd0 = seeded(5);
+const STARS = Array.from({ length: 170 }, () => ({ x: rnd0(), y: rnd0() * 0.62, r: 0.4 + rnd0() * 1.1, p: rnd0() * 6.28 }));
+const CLOUDS = Array.from({ length: 9 }, () => ({ x: rnd0(), y: 0.06 + rnd0() * 0.3, s: 0.7 + rnd0() * 1.0, v: 0.004 + rnd0() * 0.006 }));
+const MISTS = Array.from({ length: 6 }, (_, i) => ({ x: rnd0(), y: 0.2 + i * 0.07, s: 0.8 + rnd0() * 0.9, v: 0.002 + rnd0() * 0.004 }));
+const FLIES = Array.from({ length: 26 }, () => ({ x: rnd0(), y: rnd0(), p: rnd0() * 6.28, v: 0.3 + rnd0() * 0.6 }));
+const BIRDS = Array.from({ length: 5 }, (_, i) => ({ x: rnd0(), y: 0.14 + rnd0() * 0.18, v: 0.012 + rnd0() * 0.01, p: rnd0() * 6.28, s: 0.7 + rnd0() * 0.6, rank: i / 5 }));
+const DROPS = Array.from({ length: 150 }, () => ({ x: rnd0(), y: rnd0(), v: 0.9 + rnd0() * 0.7, l: 0.02 + rnd0() * 0.02 }));
+const GLINTS = Array.from({ length: 90 }, () => ({ x: rnd0(), y: rnd0(), p: rnd0() * 6.28, w: 0.006 + rnd0() * 0.02 }));
+let flashAt = 0, flashGlow = 0;
+
+function resize() {
+  ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+  W = canvas.clientWidth; H = canvas.clientHeight;
+  canvas.width = Math.round(W * ratio); canvas.height = Math.round(H * ratio);
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  horizon = H * (W < 620 ? 0.5 : 0.56);     // where the far shore meets the water
+}
+
+function ridgeY(r, x) {                      // x from 0 to 1, with a little parallax
+  const shift = (pointerX - 0.5) * 0.012 * (0.3 + r.depth);
+  const f = Math.min(Math.max(x + shift, 0), 1) * (r.pts.length - 1);
+  const i = Math.floor(f), t = f - i;
+  const h = mix(r.pts[i], r.pts[Math.min(i + 1, r.pts.length - 1)], t);
+  return horizon - h * horizon * 0.86;
+}
+
+function drawRidge(r, color, flip) {
+  ctx.beginPath();
+  ctx.moveTo(0, horizon);
+  for (let i = 0; i <= 80; i++) {
+    const x = i / 80, y = ridgeY(r, x);
+    ctx.lineTo(x * W, flip ? horizon + (horizon - y) * 0.62 : y);
+  }
+  ctx.lineTo(W, horizon);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function tree(t, time, color, flip) {
+  const sway = Math.sin(time * 0.9 * (0.6 + now.wind * 0.5) + t.lean) * t.w * 0.16 * now.wind;
+  const x = t.x * W, ground = horizon + t.dip * H, h = t.h * H * (flip ? -0.55 : 1), w = t.w * H;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  if (t.pine) {                              // white pine: a bare trunk and a few uneven shelves near the top
+    ctx.rect(x - w * 0.05, ground - h, w * 0.1, h);
+    for (let k = 0; k < 4; k++) {
+      const y = ground - h * (0.55 + k * 0.13), reach = w * (0.62 - k * 0.11) * (k % 2 ? 1 : 0.8);
+      ctx.moveTo(x + sway * (0.4 + k * 0.2) - reach, y);
+      ctx.quadraticCurveTo(x + sway, y - h * 0.11, x + sway * (0.4 + k * 0.2) + reach * 1.15, y - h * 0.015);
+      ctx.quadraticCurveTo(x + sway, y - h * 0.03, x + sway * (0.4 + k * 0.2) - reach, y);
+    }
+  } else {                                   // spruce and fir: a narrow spire of stepped boughs
+    for (let k = 0; k < 5; k++) {
+      const y0 = ground - h * (k / 5) * 0.9, y1 = ground - h * Math.min(1, (k + 1.7) / 5), half = w * (1 - k / 5.6) * 0.5;
+      const lean = sway * ((k + 1) / 5);
+      ctx.moveTo(x - half + lean * 0.5, y0);
+      ctx.lineTo(x + lean, y1);
+      ctx.lineTo(x + half + lean * 0.5, y0);
+    }
+  }
+  ctx.fill();
+}
+
+function soft(x, y, rx, ry, color, alpha) {  // a soft-edged ellipse, used for cloud, mist and glow
+  const g = ctx.createRadialGradient(x, y, 0, x, y, rx);
+  g.addColorStop(0, rgb(color, alpha)); g.addColorStop(1, rgb(color, 0));
+  ctx.save(); ctx.translate(x, y); ctx.scale(1, ry / rx); ctx.translate(-x, -y);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, rx, 0, 6.2832); ctx.fill(); ctx.restore();
+}
+
+let lastFrame = 0;
+function draw(ms) {
+  if (!still && ms - lastFrame < 30) { requestAnimationFrame(draw); return; }   // about thirty frames a second is plenty
+  lastFrame = ms;
+  const time = ms / 1000;
+  // drift every number toward where her mood wants it
+  const ease = still ? 1 : 0.02;
+  for (const k in goal) {
+    if (Array.isArray(goal[k])) for (let i = 0; i < 3; i++) now[k][i] = mix(now[k][i], goal[k][i], ease);
+    else now[k] = mix(now[k], goal[k], ease);
+  }
+  const light = 0.25 + 0.75 * dawn;          // before she wakes, the whole place is dim
+  const top = blend([10, 14, 30], now.top, light), low = blend([40, 44, 70], now.low, light);
+
+  // sky
+  let g = ctx.createLinearGradient(0, 0, 0, horizon);
+  g.addColorStop(0, rgb(top)); g.addColorStop(0.72, rgb(blend(top, low, 0.72))); g.addColorStop(1, rgb(low));
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, horizon + 1);
+
+  // stars
+  const night = Math.max(now.stars, 1 - dawn);
+  if (night > 0.02) {
+    for (const s of STARS) {
+      const tw = 0.55 + 0.45 * Math.sin(time * 1.3 + s.p);
+      ctx.fillStyle = `rgba(255,250,235,${night * tw * 0.9})`;
+      ctx.beginPath(); ctx.arc(s.x * W, s.y * horizon, s.r, 0, 6.2832); ctx.fill();
+    }
+  }
+
+  // sun, or moon. While she loads, the sun climbs from behind the mountains.
+  const sx = now.sunX * W, sy = mix(horizon * 1.02, now.sunY * horizon, dawn);
+  const disc = Math.max(14, Math.min(W, H) * 0.035);
+  if (now.sun > 0.02) {
+    soft(sx, sy, disc * 9, disc * 9, now.glow, 0.5 * now.sun * light);
+    soft(sx, sy, disc * 3, disc * 3, [255, 246, 220], 0.75 * now.sun);
+    ctx.fillStyle = rgb([255, 248, 226], now.sun); ctx.beginPath(); ctx.arc(sx, sy, disc, 0, 6.2832); ctx.fill();
+  }
+  if (now.moon > 0.02) {
+    soft(sx, sy, disc * 6, disc * 6, now.glow, 0.28 * now.moon);
+    ctx.fillStyle = rgb([236, 240, 255], now.moon); ctx.beginPath(); ctx.arc(sx, sy, disc * 0.8, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = rgb(blend(top, low, 0.2), now.moon); ctx.beginPath(); ctx.arc(sx + disc * 0.34, sy - disc * 0.12, disc * 0.72, 0, 6.2832); ctx.fill();
+  }
+
+  // lightning far off, when she is offended
+  if (now.flash > 0.5 && !still && time > flashAt) { flashGlow = 1; flashAt = time + 4 + Math.random() * 7; }
+  if (flashGlow > 0.01) { ctx.fillStyle = `rgba(255,236,220,${flashGlow * 0.16})`; ctx.fillRect(0, 0, W, horizon); flashGlow *= 0.86; }
+
+  // clouds
+  const cloudTint = blend([255, 250, 242], [52, 50, 62], now.dark);
+  for (const c of CLOUDS) {
+    const x = ((c.x + time * c.v * (0.4 + now.wind)) % 1.3 - 0.15) * W, y = c.y * horizon;
+    const r = Math.min(W, 900) * 0.16 * c.s;
+    soft(x, y, r, r * 0.34, cloudTint, 0.5 * now.cloud);
+    soft(x + r * 0.5, y + r * 0.08, r * 0.8, r * 0.3, cloudTint, 0.4 * now.cloud);
+    soft(x - r * 0.45, y + r * 0.1, r * 0.7, r * 0.26, cloudTint, 0.35 * now.cloud);
+  }
+
+  // birds, when she is glad
+  if (now.birds > 0.05) {
+    ctx.strokeStyle = rgb(blend(now.near, [0, 0, 0], 0.2), 0.7 * now.birds); ctx.lineWidth = 1.4; ctx.lineCap = "round";
+    for (const b of BIRDS) {
+      if (b.rank > now.birds) continue;
+      const x = ((b.x + time * b.v) % 1.2 - 0.1) * W, y = b.y * horizon + Math.sin(time * 0.7 + b.p) * 6;
+      const flap = Math.sin(time * 7 + b.p) * 3 * b.s, span = 7 * b.s;
+      ctx.beginPath(); ctx.moveTo(x - span, y - flap); ctx.quadraticCurveTo(x - span * 0.4, y - 2 - flap * 0.3, x, y);
+      ctx.quadraticCurveTo(x + span * 0.4, y - 2 - flap * 0.3, x + span, y - flap); ctx.stroke();
+    }
+  }
+
+  // mountains, far to near, with mist lying between them
+  const haze = blend(now.far, low, 0.3);
+  RIDGES.forEach((r, i) => {
+    const color = blend(blend(haze, now.far, r.depth * 0.8), now.near, Math.pow(r.depth, 1.6));
+    drawRidge(r, rgb(blend([14, 18, 34], color, light)));
+    const m = MISTS[i % MISTS.length], m2 = MISTS[(i + 3) % MISTS.length];
+    for (const q of [m, m2]) {
+      const x = ((q.x + time * q.v * (0.5 + now.wind * 0.4)) % 1.5 - 0.25) * W;
+      soft(x, horizon - (0.03 + (1 - r.depth) * 0.16) * horizon, W * 0.42 * q.s, horizon * 0.045, blend(low, [255, 255, 255], 0.5), 0.42 * now.mist * (1 - 0.6 * r.depth));
+    }
+  });
+
+  // the lake
+  const water = blend([10, 16, 34], now.water, light);
+  g = ctx.createLinearGradient(0, horizon, 0, H);
+  g.addColorStop(0, rgb(blend(low, water, 0.45))); g.addColorStop(0.35, rgb(water)); g.addColorStop(1, rgb(blend(water, [6, 10, 20], 0.72)));
+  ctx.fillStyle = g; ctx.fillRect(0, horizon, W, H - horizon);
+
+  // the mountains and trees again, upside down in the water
+  ctx.save(); ctx.beginPath(); ctx.rect(0, horizon, W, H - horizon); ctx.clip(); ctx.globalAlpha = 0.34;
+  RIDGES.forEach((r) => drawRidge(r, rgb(blend(blend(haze, now.far, r.depth * 0.8), now.near, Math.pow(r.depth, 1.6))), true));
+  ctx.globalAlpha = 0.3;
+  const treeColor = rgb(blend([6, 10, 16], blend(now.near, [0, 0, 0], 0.35), light));
+  for (const t of TREES) tree(t, time, treeColor, true);
+  ctx.restore();
+
+  // the path of light across the water
+  const bright = now.sun > now.moon ? now.sun : now.moon * 0.7;
+  if (bright > 0.02) {
+    for (let i = 0; i < 26; i++) {
+      const y = horizon + (H - horizon) * Math.pow(i / 26, 1.5) + 2;
+      const w = disc * (0.8 + i * 0.5) * (0.7 + 0.3 * Math.sin(time * 1.7 + i * 1.9));
+      ctx.fillStyle = rgb(blend(now.glow, [255, 255, 255], 0.3), 0.2 * bright * dawn * (1 - i / 30));
+      ctx.fillRect(sx - w + Math.sin(time * 0.8 + i) * 4, y, w * 2, 1.6 + i * 0.07);
+    }
+  }
+  // small glints and slow ripples
+  for (const q of GLINTS) {
+    const a = Math.max(0, Math.sin(time * 1.1 + q.p)) * 0.3 * now.glitter;
+    if (a < 0.02) continue;
+    const y = horizon + 4 + q.y * q.y * (H - horizon);
+    ctx.fillStyle = rgb(blend(now.glow, [255, 255, 255], 0.5), a);
+    ctx.fillRect(((q.x + time * 0.004) % 1) * W, y, q.w * W * (0.5 + q.y), 1.2);
+  }
+  ctx.strokeStyle = rgb([255, 255, 255], 0.05); ctx.lineWidth = 1;
+  for (let i = 0; i < 9; i++) {
+    const y = horizon + (H - horizon) * Math.pow((i + ((time * 0.03) % 1)) / 9, 1.7);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // a loon, crossing slowly
+  const lx = ((time * 0.006 + 0.3) % 1.3 - 0.15) * W, ly = horizon + (H - horizon) * (W < 620 ? 0.07 : 0.2) + Math.sin(time * 0.6) * 1.5, ls = Math.max(0.8, W / 1300);
+  ctx.strokeStyle = rgb([255, 255, 255], 0.16); ctx.lineWidth = 1;
+  for (let k = 1; k <= 3; k++) { ctx.beginPath(); ctx.moveTo(lx - 12 * ls, ly + 1); ctx.lineTo(lx - (20 + k * 26) * ls, ly + 1 + k * 4.2 * ls); ctx.stroke(); }
+  ctx.fillStyle = rgb(blend([8, 10, 14], now.near, 0.25));
+  ctx.beginPath(); ctx.ellipse(lx, ly, 13 * ls, 4.2 * ls, 0, 0, 6.2832); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(lx + 8 * ls, ly - 1 * ls); ctx.quadraticCurveTo(lx + 12 * ls, ly - 9 * ls, lx + 15 * ls, ly - 8.6 * ls);
+  ctx.lineTo(lx + 22 * ls, ly - 7.6 * ls); ctx.lineTo(lx + 15.5 * ls, ly - 6.2 * ls); ctx.quadraticCurveTo(lx + 13 * ls, ly - 3 * ls, lx + 12 * ls, ly); ctx.fill();
+
+  // the near shore: a dark band of trees
+  ctx.fillStyle = treeColor;
+  ctx.beginPath(); ctx.moveTo(0, horizon + H * 0.014);
+  for (const t of TREES) ctx.lineTo(t.x * W, horizon + t.dip * H);
+  ctx.lineTo(W, horizon + H * 0.014); ctx.closePath(); ctx.fill();
+  for (const t of TREES) tree(t, time, treeColor, false);
+
+  // a small dock with one chair kept empty, at the right
+  const dx = W * (W < 620 ? 0.80 : 0.84), dy = H * 0.86, u = Math.max(0.62, Math.min(W, 1500) / 1500) * (W < 620 ? 0.8 : 1.25);
+  ctx.fillStyle = rgb(blend([4, 6, 10], now.near, 0.25));
+  ctx.fillRect(dx - 90 * u, dy, 260 * u, 7 * u);
+  for (const px of [-70, -10, 60, 130]) ctx.fillRect(dx + px * u, dy, 6 * u, H);
+  ctx.save(); ctx.translate(dx + 20 * u, dy); ctx.scale(-u, u);   // the chair faces the lake
+  ctx.beginPath();
+  ctx.moveTo(-2, 0); ctx.lineTo(4, -22); ctx.lineTo(-8, -66); ctx.lineTo(0, -68); ctx.lineTo(13, -24);   // tall slanted back
+  ctx.lineTo(44, -30); ctx.lineTo(46, -24); ctx.lineTo(42, -23); ctx.lineTo(46, 0); ctx.lineTo(41, 0);   // seat and front leg
+  ctx.lineTo(37, -20); ctx.lineTo(12, -15); ctx.lineTo(4, 0); ctx.closePath(); ctx.fill();
+  ctx.fillRect(2, -40, 48, 4.5);                                                                         // the wide flat arm
+  ctx.fillRect(44, -38, 4, 16);
+  ctx.restore();
+
+  // fireflies over the near water at dusk
+  if (now.flies > 0.03 && dawn > 0.5) {
+    for (const f of FLIES) {
+      const a = Math.max(0, Math.sin(time * f.v * 2 + f.p)) * now.flies;
+      if (a < 0.05) continue;
+      const x = (f.x + Math.sin(time * 0.2 * f.v + f.p) * 0.03) * W, y = horizon - H * 0.03 + f.y * (H - horizon) * 0.8 + Math.cos(time * 0.3 * f.v + f.p) * 10;
+      soft(x, y, 9, 9, [226, 240, 150], a * 0.55);
+      ctx.fillStyle = `rgba(240,250,190,${a})`; ctx.beginPath(); ctx.arc(x, y, 1.3, 0, 6.2832); ctx.fill();
+    }
+  }
+
+  // rain, when she is hurt
+  if (now.rain > 0.03) {
+    ctx.strokeStyle = `rgba(220,230,236,${0.3 * now.rain})`; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const d of DROPS) {
+      const y = ((d.y + time * d.v) % 1) * H, x = ((d.x + time * 0.05 * now.wind) % 1) * W;
+      ctx.moveTo(x, y); ctx.lineTo(x - d.l * H * 0.25 * now.wind, y + d.l * H);
+    }
+    ctx.stroke();
+  }
+
+  // darken the low left corner a little, so her words are always easy to read
+  g = ctx.createLinearGradient(0, H * 0.45, 0, H);
+  g.addColorStop(0, "rgba(6,10,18,0)"); g.addColorStop(1, "rgba(6,10,18,0.5)");
+  ctx.fillStyle = g; ctx.fillRect(0, H * 0.45, W, H * 0.55);
+
+  if (!still) requestAnimationFrame(draw);
+}
+
+function setMood(name) { if (SKIES[name]) { goal = SKIES[name]; if (still) requestAnimationFrame(draw); } }
+
+buildRidges(); buildTrees(); resize();
+addEventListener("resize", () => { resize(); if (still) requestAnimationFrame(draw); });
+addEventListener("pointermove", (e) => { pointerX = e.clientX / Math.max(W, 1); });
+requestAnimationFrame(draw);
+
+/* ================================================================== talking to her */
+
+const $ = (id) => document.getElementById(id);
+const said = $("said"), feeling = $("feeling"), form = $("form"), words = $("words"), sayButton = $("say");
+let worker = null, busy = false, current = null, turnId = 0;
+
+let home = null;                             // the folder her files sit in, beside this page
+function here(file) { return new URL(file, home).href; }
+
+async function findHer() {                   // works whether the page is served as /excelsia/ or /excelsia
+  const tries = [new URL("./", location.href)];
+  const last = location.pathname.split("/").pop();
+  if (last && !last.includes(".")) tries.push(new URL(last + "/", location.href));
+  for (const folder of tries) {
+    for (const name of ["excelsia.bin", "excelsia.wasm"]) {   // some hosts only serve the second name
+      try {
+        const response = await fetch(new URL(name, folder));
+        const kind = response.headers.get("content-type") || "";
+        if (response.ok && !kind.includes("text/html")) { home = folder; return response; }
+      } catch (ignored) { /* try the next place */ }
+    }
+  }
+  throw new Error("her file was not found beside this page");
+}
+
+function setBusy(on) { busy = on; sayButton.disabled = on; words.disabled = on && !current; }
+
+function addTurn(you) {
+  const turn = document.createElement("div"); turn.className = "turn";
+  if (you) { const p = document.createElement("p"); p.className = "you"; p.textContent = you; turn.appendChild(p); }
+  const her = document.createElement("p"); her.className = "her"; turn.appendChild(her);
+  said.appendChild(turn);
+  while (said.children.length > 12) said.removeChild(said.firstChild);
+  said.scrollTop = said.scrollHeight;
+  return { her, shown: 0 };
+}
+
+function showWords(text) {                   // add only the words that are new, so each one rises once
+  if (!current) return;
+  const parts = text.split(" ");
+  for (let i = current.shown; i < parts.length; i++) {
+    if (i) current.her.appendChild(document.createTextNode(" "));
+    const span = document.createElement("span"); span.className = "word";
+    span.textContent = parts[i];
+    current.her.appendChild(span);
+  }
+  // punctuation attaches to the word before it, so the last word may have changed
+  if (current.shown > 0 && current.shown <= parts.length) {
+    const last = current.her.children[current.shown - 1];
+    if (last && last.textContent !== parts[current.shown - 1]) last.textContent = parts[current.shown - 1];
+  }
+  current.shown = parts.length;
+  said.scrollTop = said.scrollHeight;
+}
+
+function say(text, quiet) {
+  if (busy || !worker) return;
+  setBusy(true);
+  current = addTurn(quiet ? "" : text);
+  feeling.innerHTML = 'She is thinking<span class="dots"></span>';
+  worker.postMessage({ type: "say", text, id: ++turnId });
+}
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = words.value.trim();
+  if (!text || busy) return;
+  words.value = "";
+  say(text, false);
+});
+
+$("forget").addEventListener("click", () => {
+  if (busy || !worker) return;
+  said.textContent = ""; setMood("peace");
+  worker.postMessage({ type: "forget" });
+});
+
+const about = $("about");
+$("about-open").addEventListener("click", () => about.showModal());
+$("about-close").addEventListener("click", () => about.close());
+about.addEventListener("click", (e) => { if (e.target === about) about.close(); });
+
+function awake() {
+  $("waking").hidden = true;
+  for (const id of ["said", "feeling", "form", "under"]) $(id).hidden = false;
+  const rise = (t0) => (t) => { dawn = Math.min(1, dawn + 0.012); if (dawn < 1) requestAnimationFrame(rise(t0)); else if (still) requestAnimationFrame(draw); };
+  requestAnimationFrame(rise());
+  say("hello", true);                        // she speaks first
+  if (matchMedia("(pointer: fine)").matches) words.focus();
+}
+
+function failed(why) {
+  $("waking").hidden = false;
+  $("waking-line").textContent = "She could not wake up. Reload the page to try again.";
+  $("waking-bar").hidden = true;
+  console.error(why);
+}
+
+async function wake() {
+  try {
+    const response = await findHer();
+    const total = Number(response.headers.get("content-length")) || 18700000;
+    const reader = response.body.getReader(), chunks = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value); got += value.length;
+      const part = Math.min(1, got / total);
+      dawn = part * 0.55;                    // the sky lightens as she arrives
+      $("waking-bar").firstElementChild.style.width = (part * 100).toFixed(1) + "%";
+      $("waking-bar").setAttribute("aria-valuenow", String(Math.round(part * 100)));
+      if (still) requestAnimationFrame(draw);
+    }
+    const all = new Uint8Array(got);
+    let at = 0;
+    for (const c of chunks) { all.set(c, at); at += c.length; }
+    worker = new Worker(here("engine.js"));
+    worker.onerror = (e) => failed(e.message || "her worker stopped");
+    worker.onmessage = (event) => {
+      const m = event.data;
+      if (m.type === "ready") awake();
+      else if (m.type === "mood") setMood(m.mood);
+      else if (m.type === "word" && m.id === turnId) showWords(m.text);
+      else if (m.type === "done" && m.id === turnId) {
+        showWords(m.text); setMood(m.mood);
+        feeling.textContent = FEELING[m.mood] || "";
+        current = null; setBusy(false); words.disabled = false;
+        if (matchMedia("(pointer: fine)").matches) words.focus();
+      } else if (m.type === "forgotten") { feeling.textContent = ""; say("hello", true); }
+      else if (m.type === "error") failed(m.message);
+    };
+    worker.postMessage({ type: "load", buffer: all.buffer }, [all.buffer]);
+  } catch (why) { failed(why); }
+}
+wake();
+</script>
+</body>
+</html>
