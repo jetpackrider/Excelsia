@@ -6,9 +6,34 @@
 <title>Excelsia</title>
 <meta name="description" content="A tiny language model who believes she is New York. Every word she says is printed in the state constitution.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237aa2c0'/%3E%3Ccircle cx='11' cy='12' r='5' fill='%23fff3d6'/%3E%3Cpath d='M0 24 L9 15 L15 20 L22 11 L32 22 V32 H0Z' fill='%231c3438'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+<script>
+/* Her files sit beside this page. The page may be served as /excelsia/ or as /excelsia,
+   so there are up to two folders to look in. Her typefaces are loaded from there too,
+   which keeps the page from asking any other site for anything. */
+const PLACES = [];
+(function () {
+  const last = location.pathname.split("/").pop();
+  if (last && !last.includes(".")) PLACES.push(new URL(last + "/", location.href));
+  PLACES.push(new URL("./", location.href));
+  const faces = [
+    ["IM Fell English", "im-fell-english-400.woff2", { style: "normal", weight: "400" }],
+    ["IM Fell English", "im-fell-english-400-italic.woff2", { style: "italic", weight: "400" }],
+    ["Alegreya Sans", "alegreya-sans-400.woff2", { style: "normal", weight: "400" }],
+    ["Alegreya Sans", "alegreya-sans-700.woff2", { style: "normal", weight: "700" }],
+  ];
+  if (!window.FontFace) return;
+  for (const [family, file, how] of faces) {
+    (async () => {
+      for (const folder of PLACES) {
+        try {
+          const face = new FontFace(family, "url(" + new URL("fonts/" + file, folder).href + ")", how);
+          await face.load(); document.fonts.add(face); return;
+        } catch (ignored) { /* try the next folder; without it the fallback faces are used */ }
+      }
+    })();
+  }
+})();
+</script>
 <style>
 /* One place, one world: a lake in the Adirondacks, and the sky is her mood.
    Layout: the scene fills the screen; her words sit low on the left, over the water. */
@@ -516,10 +541,7 @@ let home = null;                             // the folder her files sit in, bes
 function here(file) { return new URL(file, home).href; }
 
 async function findHer() {                   // works whether the page is served as /excelsia/ or /excelsia
-  const tries = [new URL("./", location.href)];
-  const last = location.pathname.split("/").pop();
-  if (last && !last.includes(".")) tries.push(new URL(last + "/", location.href));
-  for (const folder of tries) {
+  for (const folder of PLACES) {
     for (const name of ["excelsia.bin", "excelsia.wasm"]) {   // some hosts only serve the second name
       try {
         const response = await fetch(new URL(name, folder));
