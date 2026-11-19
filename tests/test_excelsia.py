@@ -232,18 +232,29 @@ def test_the_bot_makes_people_wait_their_turn():
     assert not room.too_soon(1, now=100.0 + PAUSE * 2)
 
 
-def test_the_bot_reports_her_mood_with_each_reply():
-    from bot.talk import Room
+def test_the_bot_keeps_threads_apart_but_shares_her_mood():
+    from bot.talk import REMEMBER, Room
 
     class Canned:
-        block = 256
+        block, seen = 256, []
         def generate(self, ids, allowed, stop, max_new=48, temperature=0.8, not_first=None, rng=None):
+            Canned.seen.append(list(ids))
             return tok.encode("the waters remain.")
 
     room = Room(model=Canned(), tok=tok)
-    assert room.reply(7, "you are wonderful, thank you", now=0.0) == ("pleasure", "The waters remain.")
-    assert room.reply(7, "i hate you, stupid", now=1.0)[0] in ("peace", "pain")   # the same room sours
-    assert room.reply(8, "hello", now=1.0)[0] == "peace"                          # another room is untouched
+    forest, city = tok.stoi["forest"], tok.stoi["city"]
+    assert room.reply(7, 1, "you are wonderful, thank you", now=0.0) == ("pleasure", "The waters remain.")
+    room.reply(7, 1, "tell me about the forest", now=1.0)
+    mood, _ = room.reply(7, 2, "what about the city", now=2.0)
+    assert mood != "peace"                          # person 2 meets the mood person 1 left her in
+    assert forest not in Canned.seen[-1]            # but not person 1's conversation
+    room.reply(7, 1, "and then?", now=3.0)
+    assert forest in Canned.seen[-1] and city not in Canned.seen[-1]   # person 1's thread carries on
+    for i in range(5):
+        room.reply(7, 1, "more", now=4.0 + i)
+    assert Canned.seen[-1].count(tok.user) == REMEMBER + 1             # only the last few exchanges
+    assert room.reply(8, 1, "hello", now=20.0)[0] == "peace"           # another channel is untouched
+
 
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):

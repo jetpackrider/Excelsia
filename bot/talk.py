@@ -6,10 +6,12 @@ import re
 import time
 
 from excelsia.lite import Excelsia, LiteGPT
+from excelsia.mood import Mood
 from excelsia.tokenizer import Tokenizer
 
 LONGEST = 300          # characters of a message she will read
-FORGET_AFTER = 30 * 60  # seconds of quiet before a channel's conversation starts fresh
+FORGET_AFTER = 30 * 60  # seconds of quiet before a thread, or her mood, starts fresh
+REMEMBER = 2           # earlier exchanges with the same person she keeps in view
 PAUSE = 1.5            # seconds one person must wait between messages
 
 
@@ -22,11 +24,14 @@ def tidy(text: str, her_names: tuple[str, ...] = ()) -> str:
 
 
 class Room:
-    """Every channel she talks in gets its own memory and its own mood."""
+    """Who she is talking to, and where. Each person in a channel has their own thread
+    with her, so a follow-up connects to that person's last message and not to someone
+    else's. Her mood is shared by the whole channel: one rude guest sours her for all."""
 
     def __init__(self, model: LiteGPT, tok: Tokenizer | None = None):
         self.model, self.tok = model, tok or Tokenizer()
-        self.talks: dict[int, tuple[Excelsia, float]] = {}
+        self.talks: dict[tuple[int, int], tuple[Excelsia, float]] = {}
+        self.moods: dict[int, tuple[Mood, float]] = {}
         self.last: dict[int, float] = {}
 
     def too_soon(self, person: int, now: float | None = None) -> bool:
@@ -38,12 +43,19 @@ class Room:
             self.last = {p: t for p, t in self.last.items() if now - t < 60}
         return False
 
-    def reply(self, channel: int, text: str, now: float | None = None) -> tuple[str, str]:
+    def reply(self, channel: int, person: int, text: str, now: float | None = None) -> tuple[str, str]:
         """Returns (her mood, what she says)."""
         now = time.time() if now is None else now
-        talk, seen = self.talks.get(channel, (None, 0.0))
+        mood, felt = self.moods.get(channel, (None, 0.0))
+        if mood is None or now - felt > FORGET_AFTER:
+            mood = Mood()
+        talk, seen = self.talks.get((channel, person), (None, 0.0))
         if talk is None or now - seen > FORGET_AFTER:
-            talk = Excelsia(self.model, self.tok)
+            talk = Excelsia(self.model, self.tok, remember=REMEMBER)
+        talk.mood = mood
         said = talk.reply(text)
-        self.talks[channel] = (talk, now)
-        return talk.mood.name, said
+        self.moods[channel] = (mood, now)
+        self.talks[(channel, person)] = (talk, now)
+        if len(self.talks) > 500:  # let go of threads that have gone quiet
+            self.talks = {k: v for k, v in self.talks.items() if now - v[1] <= FORGET_AFTER}
+        return mood.name, said

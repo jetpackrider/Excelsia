@@ -106,22 +106,29 @@ class LiteGPT:
 
 class Excelsia:
     """One conversation with her: what has been said, and how she feels about it.
-    Several conversations can share one LiteGPT."""
+    Several conversations can share one LiteGPT, and may share one Mood.
 
-    def __init__(self, model: LiteGPT, tok: Tokenizer | None = None):
+    `remember` is how many earlier exchanges she keeps in view. None means as many
+    as fit. A small number keeps her from being steered by her own old replies."""
+
+    def __init__(self, model: LiteGPT, tok: Tokenizer | None = None, mood: Mood | None = None,
+                 remember: int | None = None):
         self.model, self.tok = model, tok or Tokenizer()
         self.allowed = np.array(self.tok.speak_mask)
         self.punct = [self.tok.stoi[p] for p in SPEAK_PUNCT]
-        self.mood = Mood()
-        self.history: list[int] = []
+        self.mood = mood or Mood()
+        self.remember = remember
+        self.turns: list[list[int]] = []  # each finished exchange, as token ids
 
     def reply(self, text: str, temperature: float = 0.8, max_new: int = 48,
               rng: np.random.Generator | None = None) -> str:
         tok = self.tok
         mood = self.mood.hear(text)
-        self.history += [tok.user] + tok.encode(text) + [tok.mood(mood), tok.excelsia]
-        self.history = self.history[-(self.model.block - max_new):]  # she remembers what fits
-        out = self.model.generate(self.history, self.allowed, tok.end, max_new, temperature,
+        asked = [tok.user] + tok.encode(text) + [tok.mood(mood), tok.excelsia]
+        before = self.turns if self.remember is None else self.turns[len(self.turns) - self.remember:]
+        prompt = [t for turn in before for t in turn] + asked
+        prompt = prompt[-(self.model.block - max_new):]  # she only sees what fits
+        out = self.model.generate(prompt, self.allowed, tok.end, max_new, temperature,
                                   not_first=self.punct, rng=rng)
-        self.history += out + [tok.end]
+        self.turns = (self.turns + [asked + out + [tok.end]])[-12:]
         return tok.decode(out)

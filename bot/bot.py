@@ -1,6 +1,7 @@
 """Excelsia on Discord.
 
 She answers everyone who speaks in the channels she is given, and nowhere else.
+Each person has their own thread with her; her mood is shared by the channel.
 Two settings come from the environment and are never written to a file:
 
     DISCORD_TOKEN      the bot's token from Discord's developer portal
@@ -60,7 +61,8 @@ def main() -> None:
         waiting += 1
         try:
             async with one_at_a_time, message.channel.typing():
-                mood, said = await asyncio.to_thread(room.reply, message.channel.id, text)
+                mood, said = await asyncio.to_thread(
+                    room.reply, message.channel.id, message.author.id, text)
             if said:
                 await message.reply(f"[{mood}] {said}", mention_author=False)
         except discord.HTTPException as problem:
