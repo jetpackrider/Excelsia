@@ -182,8 +182,10 @@ marks, no name label."""
 EXCELSIA_TASK = """Write Excelsia's reply.
 {so_far}Right now she feels {feeling}. Let that show in what she says.
 Answer what the person actually said, in a way that makes sense. Use only her allowed
-words, in lower case, one or two short sentences. Vary how her sentences begin, and
-do not repeat a sentence. {tired}Write only her reply."""
+words, in lower case, one or two short sentences. Say it small and simple, the way a
+child would, even when the question is about laws or government: never quote or copy
+the constitution's legal wording. Vary how her sentences begin, and do not repeat a
+sentence. {tired}Write only her reply."""
 
 TIRED = "She has leaned on these words too much lately, so leave them out this time: {words}. "
 
@@ -204,7 +206,7 @@ class Tally:
     """Keeps count, across the whole run, of how many kept replies use each word, so the
     teacher can be steered away from whatever she is starting to lean on."""
 
-    def __init__(self, cap: float = 0.15, after: int = 30):
+    def __init__(self, cap: float = 0.22, after: int = 40):
         self.cap, self.after = cap, after
         self.replies = 0
         self.uses: dict[str, int] = {}
@@ -217,7 +219,7 @@ class Tally:
                 self.uses[w] = self.uses.get(w, 0) + 1
         if self.replies >= self.after:
             over = [w for w, n in self.uses.items() if n > self.cap * self.replies]
-            self.tired = sorted(over, key=lambda w: -self.uses[w])[:8]
+            self.tired = sorted(over, key=lambda w: -self.uses[w])[:5]
 
 
 def word_rules(words: list[str]) -> tuple[dict[str, tuple[list[tuple[str, str]], bool]], str]:
