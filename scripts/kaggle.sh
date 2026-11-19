@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Run Excelsia's pipeline on a free Kaggle GPU notebook.
 #
-#   bash scripts/kaggle.sh check                  # tests + what GPU we got
-#   bash scripts/kaggle.sh chats 300              # local Gemma writes 300 practice chats
-#   bash scripts/kaggle.sh english 180 medium 1000000   # minutes, model size, stories
-#   bash scripts/kaggle.sh excelsia               # fine-tune on the chats, then talk to her
-#   bash scripts/kaggle.sh pack                   # copy the results where Kaggle saves them
+#   bash scripts/kaggle.sh all        # everything, start to finish (what the notebook runs)
+#
+# `all` reads its settings from the environment:
+#   EXCELSIA_CHATS=300      how many practice chats Gemma writes
+#   EXCELSIA_MINUTES=0      minutes of English training; 0 = only write chats
+#   EXCELSIA_SIZE=medium    model size for the English training
+#   EXCELSIA_STORIES=0      how many stories to learn from; 0 = all of them
+# With two GPUs it trains on one while Gemma writes chats on the other.
+#
+# The single stages still work on their own: check, chats N, english MIN SIZE STORIES,
+# excelsia, pack.
 #
 # The teacher model is open-weight Gemma (Apache 2.0), downloaded and run on the
 # notebook's own GPUs. No hosted AI service is called.
@@ -67,8 +73,10 @@ build_llama() {
   # documented switch for building without it. It only changes how GPU memory is pooled.
   cmake /tmp/llama.cpp -B /tmp/llama.cpp/build -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON \
     -DGGML_CUDA_NO_VMM=ON > /tmp/cmake.log 2>&1 || { tail -30 /tmp/cmake.log; return 1; }
-  cmake --build /tmp/llama.cpp/build --config Release -j --target llama-server > /tmp/build.log 2>&1 \
-    || { tail -40 /tmp/build.log; return 1; }
+  cmake --build /tmp/llama.cpp/build --config Release -j --target llama-server > /tmp/build.log 2>&1 &
+  local bp=$!
+  while kill -0 "$bp" 2>/dev/null; do sleep 60; echo "  still building ($(wc -l < /tmp/build.log) lines of compiler output so far)"; done
+  wait "$bp" || { tail -40 /tmp/build.log; return 1; }
   [ -x "$LLAMA_BIN" ]
 }
 
@@ -131,6 +139,84 @@ wait_for_server() {  # wait_for_server <gpu number> <port> <pid>
 
 stop_servers() { for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null || true; done; }
 
+gpu_count() { { nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null || true; } | wc -l; }
+
+run_chats() {  # run_chats <how many> <gpu numbers...>   one copy of Gemma per GPU listed
+  local n="$1"; shift
+  local gpus=("$@") g i=0
+  mkdir -p "$OUT"
+  install_engine
+  get_model
+  trap stop_servers EXIT
+  echo "== starting ${#gpus[@]} copy/copies of the model server"
+  for g in "${gpus[@]}"; do start_server "$g" $((PORT + g)); done
+  for g in "${gpus[@]}"; do wait_for_server "$g" $((PORT + g)) "${PIDS[$i]}"; i=$((i + 1)); done
+  local each=$(( (n + ${#gpus[@]} - 1) / ${#gpus[@]} )) writers=()
+  for g in "${gpus[@]}"; do
+    # Written straight into the folder Kaggle keeps, one chat at a time.
+    python -m excelsia.gen_chats --n "$each" --server "http://127.0.0.1:$((PORT + g))" \
+      --out "$OUT/chats.part$g.jsonl" &
+    writers+=($!)
+  done
+  for w in "${writers[@]}"; do wait "$w" || echo "one writer stopped early (see above)"; done
+  stop_servers
+  merge_chats
+}
+
+merge_chats() {
+  EXCELSIA_OUT="$OUT" python - <<'PY'
+import glob, json, os, random
+out = os.environ["EXCELSIA_OUT"]
+main = os.path.join(out, "chats.jsonl")
+kept, uses, seen_chats = [], {}, set()
+files = ([main] if os.path.exists(main) else []) + sorted(glob.glob(os.path.join(out, "chats.part*.jsonl")))
+for path in files:
+    for line in open(path, encoding="utf-8"):
+        if not line.strip() or line in seen_chats:
+            continue
+        try:
+            chat = json.loads(line)
+        except ValueError:
+            continue  # a line cut off mid-write
+        replies = [t["reply"] for t in chat["turns"]]
+        if any(uses.get(r, 0) >= 2 for r in replies):  # the same line said too often across copies
+            continue
+        for r in replies:
+            uses[r] = uses.get(r, 0) + 1
+        seen_chats.add(line)
+        kept.append(line if line.endswith("\n") else line + "\n")
+open(main, "w", encoding="utf-8").writelines(kept)
+open("data/chats.jsonl", "w", encoding="utf-8").writelines(kept)
+for path in glob.glob(os.path.join(out, "chats.part*.jsonl")):
+    os.remove(path)
+print(f"\n== {len(kept)} chats saved. A random sample to read:")
+for line in random.sample(kept, min(15, len(kept))):
+    chat = json.loads(line)
+    print(f"--- {chat['topic']}")
+    for t in chat["turns"]:
+        print(f"  person: {t['user']}\n  excelsia [{t['mood']}]: {t['reply']}")
+PY
+}
+
+run_english() {  # run_english <minutes> <size> <stories>
+  python -m excelsia.train stories --n "$3"
+  python -m excelsia.train pretrain --size "$2" --minutes "$1" --steps 2000000 --batch 64
+}
+
+run_excelsia() {
+  python -m excelsia.train finetune &&
+  python -m excelsia.chat --say "hello" --say "who are you?" --say "is your name excelsia?" \
+    --say "you are wonderful, thank you" --say "what do you like?" \
+    --say "you are stupid and i hate you" --say "sorry. tell me about your forests" \
+    --say "i have to go now, goodbye"
+}
+
+pack() {
+  mkdir -p "$OUT"
+  cp work/pretrain.pt work/excelsia.pt "$OUT"/ 2>/dev/null || true
+  echo "== saved in $OUT:"; ls -lh "$OUT" | tail -n +2
+}
+
 stage="${1:-help}"; shift || true
 case "$stage" in
   check)
@@ -140,70 +226,56 @@ case "$stage" in
     ;;
   chats)
     n="${1:-300}"
-    install_engine
-    get_model
-    # One copy of Gemma per GPU, each writing its own share of the chats.
-    copies="${EXCELSIA_COPIES:-$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l)}"
+    copies="${EXCELSIA_COPIES:-$(gpu_count)}"
     [ "$copies" -lt 1 ] && copies=1
     [ "$copies" -gt 2 ] && copies=2
-    trap stop_servers EXIT
-    echo "== starting $copies copy/copies of the model server"
-    for g in $(seq 0 $((copies - 1))); do start_server "$g" $((PORT + g)); done
-    for g in $(seq 0 $((copies - 1))); do wait_for_server "$g" $((PORT + g)) "${PIDS[$g]}"; done
-    each=$(( (n + copies - 1) / copies ))
-    writers=()
-    for g in $(seq 0 $((copies - 1))); do
-      python -m excelsia.gen_chats --n "$each" --server "http://127.0.0.1:$((PORT + g))" \
-        --out "data/chats.part$g.jsonl" &
-      writers+=($!)
-    done
-    for w in "${writers[@]}"; do wait "$w" || echo "one writer stopped early (see above)"; done
-    python - <<'PY'
-import glob, json, os, random
-kept, uses, seen_chats = [], {}, set()
-files = (["data/chats.jsonl"] if os.path.exists("data/chats.jsonl") else []) + sorted(glob.glob("data/chats.part*.jsonl"))
-for path in files:
-    for line in open(path, encoding="utf-8"):
-        if not line.strip() or line in seen_chats:
-            continue
-        chat = json.loads(line)
-        replies = [t["reply"] for t in chat["turns"]]
-        if any(uses.get(r, 0) >= 2 for r in replies):  # the same line said too often across copies
-            continue
-        for r in replies:
-            uses[r] = uses.get(r, 0) + 1
-        seen_chats.add(line)
-        kept.append(line if line.endswith("\n") else line + "\n")
-open("data/chats.jsonl", "w", encoding="utf-8").writelines(kept)
-for path in glob.glob("data/chats.part*.jsonl"):
-    os.remove(path)
-print(f"\n== {len(kept)} chats in data/chats.jsonl. A random sample to read:")
-for line in random.sample(kept, min(15, len(kept))):
-    chat = json.loads(line)
-    print(f"--- {chat['topic']}")
-    for t in chat["turns"]:
-        print(f"  person: {t['user']}\n  excelsia [{t['mood']}]: {t['reply']}")
-PY
+    run_chats "$n" $(seq 0 $((copies - 1)))
     ;;
   english)
-    minutes="${1:-180}"; size="${2:-medium}"; stories="${3:-1000000}"
-    python -m excelsia.train stories --n "$stories"
-    python -m excelsia.train pretrain --size "$size" --minutes "$minutes" --steps 2000000 --batch 64
+    run_english "${1:-180}" "${2:-medium}" "${3:-1000000}"
     ;;
   excelsia)
-    python -m excelsia.train finetune
-    python -m excelsia.chat --say "hello" --say "who are you?" --say "is your name excelsia?" \
-      --say "you are wonderful, thank you" --say "what do you like?" \
-      --say "you are stupid and i hate you" --say "sorry. tell me about your forests" \
-      --say "i have to go now, goodbye"
+    run_excelsia
     ;;
   pack)
+    pack
+    ;;
+  all)
+    n="${EXCELSIA_CHATS:-300}"; minutes="${EXCELSIA_MINUTES:-0}"
+    size="${EXCELSIA_SIZE:-medium}"; stories="${EXCELSIA_STORIES:-0}"
     mkdir -p "$OUT"
-    cp -v data/chats.jsonl "$OUT"/ 2>/dev/null || true
-    cp -v work/pretrain.pt work/excelsia.pt "$OUT"/ 2>/dev/null || true
-    echo "Results are in $OUT. Download them from the notebook's Output panel."
+    describe
+    python -m tests.test_excelsia
+    gpus="${EXCELSIA_COPIES:-$(gpu_count)}"
+    en_pid=""
+    if [ "$minutes" != "0" ] && [ "$gpus" -ge 2 ]; then
+      echo "== English training started on the first GPU ($minutes minutes). Its log: $OUT/english.log"
+      ( export CUDA_VISIBLE_DEVICES=0; run_english "$minutes" "$size" "$stories" ) > "$OUT/english.log" 2>&1 &
+      en_pid=$!
+      chat_gpus="1"
+    elif [ "$gpus" -ge 2 ]; then
+      chat_gpus="0 1"
+    else
+      chat_gpus="0"
+      if [ "$minutes" != "0" ]; then run_english "$minutes" "$size" "$stories"; fi
+    fi
+    chats_ok=1
+    ( run_chats "$n" $chat_gpus ) || { chats_ok=0; echo "!! Writing the chats failed. See the messages above."; }
+    if [ -n "$en_pid" ]; then
+      while kill -0 "$en_pid" 2>/dev/null; do
+        echo "english: $(tail -n 1 "$OUT/english.log" 2>/dev/null)"; sleep 120
+      done
+      wait "$en_pid" || { echo "!! English training failed. Last lines of its log:"; tail -30 "$OUT/english.log"; }
+      grep "check:" "$OUT/english.log" | tail -3 || true
+    fi
+    if [ -f work/pretrain.pt ] && [ "$chats_ok" = 1 ] && [ -f data/chats.jsonl ]; then
+      run_excelsia || echo "!! The last training step failed. See above."
+    elif [ "$minutes" != "0" ]; then
+      echo "Skipping the last step: it needs both the English model and the chats."
+    fi
+    pack
     ;;
   *)
-    sed -n '2,12p' "$0"
+    sed -n '2,16p' "$0"
     ;;
 esac

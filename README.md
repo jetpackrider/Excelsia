@@ -86,13 +86,17 @@ python -m excelsia.chat
 The laptop is enough to prove everything works. A free Kaggle notebook is faster
 and can run Gemma without a 7 GB download at home.
 
-1. Push this repository to GitHub.
-2. On Kaggle, create a notebook from `kaggle/excelsia.ipynb`, set the accelerator
-   to a GPU and turn internet on.
-3. Put your repository's address in the first cell and run the cells in order.
+1. On Kaggle, create a notebook from `kaggle/excelsia.ipynb`, set the accelerator
+   to GPU T4 x2 and turn internet on.
+2. Set the two numbers in its one code box: how many chats to write, and how many
+   minutes of English training (0 = only write chats).
+3. Click Save Version, choose Save & Run All, and save. It runs in the background
+   and the results land in the version's output, in `excelsia_out`.
 
-`scripts/kaggle.sh` does the work, one stage per cell: `check`, `chats`,
-`english`, `excelsia`, `pack`.
+Run it in the background, not in the live editor: a long job in the editor dies
+if the tab loses its connection. `scripts/kaggle.sh all` does the work. With two
+GPUs it trains on one while Gemma writes chats on the other, and chats are saved
+one at a time as they are written.
 
 ## Where the training data comes from
 
