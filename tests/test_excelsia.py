@@ -2,6 +2,7 @@
 
     python -m tests.test_excelsia        (or: pytest)
 """
+import json
 import random
 
 import torch
@@ -273,6 +274,30 @@ def test_the_bot_keeps_threads_apart_but_shares_her_mood():
     room.forget(7)
     assert not any(k[0] == 7 for k in room.talks) and 7 not in room.moods and (8, 1) in room.talks
 
+
+
+def test_chats_written_elsewhere_are_checked_line_by_line():
+    from excelsia.check_chats import check
+    lines = [json.dumps(c) for c in [
+        {"topic": "fine", "turns": [{"user": "hi", "mood": "peace", "reply": "The waters remain."},
+                                    {"user": "why?", "mood": "peace", "reply": "the people keep them."}]},
+        {"topic": "second line has a word she lacks", "turns": [
+            {"user": "hi", "mood": "peace", "reply": "the waters remain."},
+            {"user": "ok", "mood": "peace", "reply": "you are kind."},
+            {"user": "bye", "mood": "alone", "reply": "the people go."}]},
+        {"topic": "bad mood", "turns": [{"user": "hi", "mood": "sleepy", "reply": "the waters remain."}]},
+        {"topic": "repeats herself", "turns": [
+            {"user": "hi", "mood": "peace", "reply": "the waters remain."},
+            {"user": "and?", "mood": "peace", "reply": "the waters remain."}]},
+    ]] + ["this line is not json"]
+    kept, report = check(tok, lines)
+    assert [len(c["turns"]) for c in kept] == [2, 1, 1]       # cut at the first bad line, never rewritten
+    assert kept[0]["turns"][0]["reply"] == "the waters remain."   # tidied to lower case
+    assert (report["whole"], report["shortened"], report["dropped"], report["unreadable"]) == (1, 2, 1, 1)
+    assert report["words"]["you"] == 1
+    assert all(tok.can_say(t["reply"])[0] for c in kept for t in c["turns"])
+    kept, report = check(tok, lines, least=2)                 # ask for real back-and-forth only
+    assert [len(c["turns"]) for c in kept] == [2]
 
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):

@@ -168,9 +168,16 @@ by everyone. Her replies begin with her mood in brackets. Moderators can use
 - [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), a public dataset.
 - The practice chats in `data/chats.jsonl`, written by DeepSeek's hosted API
   (the `deepseek-flash` model) in November 2026 with `--teacher deepseek`.
+- The practice chats in `data/chats-gpt.jsonl`, written by an OpenAI model in
+  ChatGPT in November 2026 from a prompt asking for longer conversations with
+  follow-ups and changes of subject. They were then checked line by line with
+  `python -m excelsia.check_chats`.
+
+Every practice chat in this repository is AI-generated.
 
 DeepSeek's API terms allowed using its output to train other models when these
-chats were written. Terms change, so read the current ones before making more.
+chats were written. OpenAI's usage policies bar using its output to train models
+meant as alternatives to or substitutes for its own, which this is not. Terms change, so read the current ones before making more.
 Many hosted AI services do not allow this at all. If you would rather no hosted
 service be involved, delete `data/chats.jsonl` and write your own with the default
 local teacher.
@@ -200,6 +207,7 @@ excelsia/tokenizer.py   vocabulary and the speaking mask
 excelsia/model.py       a small GPT
 excelsia/train.py       stories / pretrain / finetune
 excelsia/gen_chats.py   practice chats written by a teacher model
+excelsia/check_chats.py check chats written elsewhere before she trains on them
 excelsia/chat.py        talk to her; mood tracker
 excelsia/tweak.py       turn words up or down by editing her weights
 excelsia/lite.py        the same model in plain numpy, for small servers
