@@ -207,6 +207,8 @@ def usable(tok: Tokenizer, user: str, reply: str, turns: list[dict], seen: dict[
         return False
     if said and user.lower() == said[-1].lower():  # the teacher parroted her last line
         return False
+    if any(user.lower() == t["user"].lower() for t in turns):  # the person repeated themselves
+        return False
     if not tok.can_say(reply)[0] or reply[-1] not in ".?!":  # forbidden word, or cut off
         return False
     if any(words[i] == words[i + 1] == words[i + 2] for i in range(len(words) - 2)):

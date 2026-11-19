@@ -103,6 +103,7 @@ def test_bad_practice_chats_are_rejected():
     before = [{"user": "hi", "mood": "peace", "reply": "peace."}]
     assert not ok("Peace.", "the forest is wild.", before)            # teacher parroted her
     assert not ok("and now?", "peace.", before)                       # same reply twice in a chat
+    assert not ok("HI", "the forest is wild.", before)                # person repeated themselves
     assert not ok("hello", "peace.", (), {"peace.": 2})               # overused across chats
 
 
