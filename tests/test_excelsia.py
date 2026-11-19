@@ -299,6 +299,44 @@ def test_chats_written_elsewhere_are_checked_line_by_line():
     kept, report = check(tok, lines, least=2)                 # ask for real back-and-forth only
     assert [len(c["turns"]) for c in kept] == [2]
 
+
+def test_talk_chats_are_longer_and_survive_one_bad_line():
+    from excelsia.gen_chats import MOVES, make_talk
+
+    class Scripted:
+        """A stand-in teacher: the person says something new each time; her second reply
+        is unusable once, so the writer has to try that turn again."""
+        def __init__(self):
+            self.person, self.her, self.tasks = 0, 0, []
+            self.lines = ["the waters remain.", "you are nice.",
+                          "my trees are near.", "a county is a place.", "the lakes are still.",
+                          "i keep the forest.", "all is well."]
+        def ask(self, messages, temperature, max_tokens, grammar=None):
+            task = messages[-1]["content"]
+            if task.startswith("Write the next message from the person"):
+                self.person += 1
+                self.tasks.append(task)
+                return f"message number {self.person}"
+            if "cannot use here" in task:
+                return "you are nice."          # the repair fails too, so the whole try fails
+            self.her += 1
+            return self.lines[min(self.her - 1, len(self.lines) - 1)]
+
+    teacher = Scripted()
+    chat, rejected, repairs = make_talk(teacher, tok, "system", random.Random(3), tries=2, grammar=None)
+    assert 3 <= len(chat["turns"]) <= 5 and rejected == 1          # one bad line, and the chat went on
+    assert all(tok.can_say(t["reply"])[0] for t in chat["turns"])
+    assert "Situation: the person is" in teacher.tasks[0]          # the first message sets the scene
+    assert all("This time the person should" in t for t in teacher.tasks[1:])   # every later one is a move
+    assert any(any(m.split("{")[0][:30] in t for m in MOVES.values()) for t in teacher.tasks[1:])
+
+    class Hopeless(Scripted):
+        def ask(self, messages, temperature, max_tokens, grammar=None):
+            task = messages[-1]["content"]
+            return "hello there" if task.startswith("Write the next message from the person") else "you are nice."
+    chat, rejected, _ = make_talk(Hopeless(), tok, "system", random.Random(3), tries=2, grammar=None)
+    assert chat["turns"] == [] and rejected == 2                   # nothing usable: nothing kept
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

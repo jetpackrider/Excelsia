@@ -189,6 +189,41 @@ sentence. {tired}Write only her reply."""
 
 TIRED = "She has leaned on these words too much lately, so leave them out this time: {words}. "
 
+# --- "talk" chats: written to teach her to hold a conversation --------------------------
+# Her weak spot is answering the latest message. Shown her own last reply she copies it.
+# So these chats run longer, and on every turn after the first the person makes a move
+# that she can only answer well by attending to what was just said.
+MOVES = {
+    "follow": "ask a short follow-up that only makes sense because of what she just said, "
+              "such as why, which one, how come, and then what, or what about the other one",
+    "switch": "change the subject completely and without warning: now they are {topic}",
+    "back": "go back to something from earlier in this conversation (not her last reply) "
+            "and ask about it again",
+    "react": "react to what she just said (agree, doubt it, laugh, tease or push back), "
+             "then add one thing of their own",
+    "answer": "answer the question she just asked, if she asked one, then ask her one back",
+}
+
+PERSON_TALK = """Write the next message from the person talking to Excelsia.
+Who is typing: {voice}. Do not have them say who they are; it only shapes how they write.
+{so_far}{what}
+The person's manner: {manner}.
+Write only the person's message, spoken directly to her ("you"), never about her: one
+short, casual line, the way someone types in a chat, under 120 characters. Slang, lower
+case and loose punctuation are all fine. No quotation marks, no name label."""
+
+EXCELSIA_TALK = """Write Excelsia's reply to the person's last message.
+{so_far}Right now she feels {feeling}. Let that show in what she says.
+Her reply must answer that last message specifically: someone reading only it and her
+reply should see that one answers the other. If the message only makes sense because of
+something said earlier, use what was said earlier. If the person has changed the subject,
+go with them and leave the old subject behind. Do not reuse a sentence, and do not lean
+on the same nouns as her previous reply unless the person is still asking about that
+same thing.
+Use only her allowed words, in lower case. Keep it short: one or two small sentences,
+about four to fourteen words in all, said simply, the way a child would. Never quote or
+copy the constitution's legal wording. {tired}Write only her reply."""
+
 REPAIR_TASK = """That reply uses words she cannot use here: {bad}.
 Rewrite it so it means the same thing using only her allowed words and none of those.
 Replace each of those words with an allowed word or phrase of similar MEANING, or
@@ -426,10 +461,52 @@ def make_chat(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random,
     return {"topic": topic, "turns": turns}, rejected, repairs
 
 
+def make_talk(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random, tries: int,
+              grammar: str | None, tally: Tally | None = None) -> tuple[dict, int, int]:
+    """Write one longer chat built to teach conversation: three to five exchanges, with
+    follow-ups, changes of subject and looks back. A line that fails is tried once more
+    with a fresh message from the person before the chat is ended. Chats that end up with
+    fewer than two exchanges are not kept. Returns (chat, exchanges rejected, repairs)."""
+    topic, mood, voice = rng.choice(TOPICS), rng.choice(MOODS), rng.choice(VOICES)
+    turns: list[dict] = []
+    rejected = repairs = 0
+    for _ in range(rng.choices([3, 4, 5], [4, 4, 2])[0]):
+        if not turns:
+            what = f"Situation: the person is {topic}."
+        else:
+            kinds = ["follow"] * 3 + ["switch"] * 3 + ["react"] * 2 + ["answer"] * 2 + (["back"] if len(turns) > 1 else [])
+            kind = rng.choice(kinds)
+            if kind == "switch" or rng.random() < 0.4:   # a new subject often brings a new mood
+                mood = rng.choice(MOODS)
+            what = "This time the person should " + MOVES[kind].format(topic=rng.choice(TOPICS)) + "."
+        feeling, manner = FEELINGS[mood]
+        added = False
+        for _attempt in range(2):
+            user = clean(teacher.ask([
+                {"role": "system", "content": system},
+                {"role": "user", "content": PERSON_TALK.format(
+                    voice=voice, what=what, manner=manner, so_far=transcript(turns))}], 1.0, 60))
+            tired = tuple(tally.tired) if tally else ()
+            reply, used = write_reply(teacher, tok, system, EXCELSIA_TALK.format(
+                so_far=transcript(turns, user), feeling=feeling,
+                tired=TIRED.format(words=", ".join(tired)) if tired else ""), tries, grammar, tired)
+            repairs += used - 1
+            if usable(tok, user, reply, turns, {}):
+                turns.append({"user": user, "mood": mood, "reply": reply})
+                added = True
+                break
+            rejected += 1
+        if not added:
+            break
+    return {"topic": topic, "turns": turns if len(turns) >= 2 else []}, rejected, repairs
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="python -m excelsia.gen_chats")
     p.add_argument("--n", type=int, default=300, help="how many chats to add")
-    p.add_argument("--out", default=str(DATA / "chats.jsonl"))
+    p.add_argument("--out", help="file to add to (default data/chats.jsonl, or data/chats-talk.jsonl with --talk)")
+    p.add_argument("--talk", action="store_true",
+                   help="write longer chats built to teach conversation: follow-ups, changes of subject")
     p.add_argument("--teacher", choices=["local", "deepseek"], default="local")
     p.add_argument("--server", help="address of the teacher (default depends on --teacher)")
     p.add_argument("--model", help="model name for a hosted API (deepseek: deepseek-flash or deepseek-v4-pro)")
@@ -469,7 +546,8 @@ def main() -> None:
         workers = a.workers or 1
     grammar = build_grammar(words) if a.grammar else None
 
-    out, rng = Path(a.out), random.Random(a.seed)
+    out, rng = Path(a.out or DATA / ("chats-talk.jsonl" if a.talk else "chats.jsonl")), random.Random(a.seed)
+    write_one = make_talk if a.talk else make_chat
     if a.replace and out.exists() and not a.dry_run:
         keep = WORK / f"{out.stem}-old-{int(time.time())}{out.suffix}"
         WORK.mkdir(exist_ok=True)
@@ -485,10 +563,16 @@ def main() -> None:
     stop = False
     with out.open("a", encoding="utf-8") as f, ThreadPoolExecutor(workers) as pool:
         while made < a.n and not stop:
-            batch = [pool.submit(make_chat, teacher, tok, system, random.Random(rng.random()),
+            batch = [pool.submit(write_one, teacher, tok, system, random.Random(rng.random()),
                                  a.tries, grammar, tally) for _ in range(min(workers * 2, a.n - made))]
             for job in as_completed(batch):
-                chat, bad, fixed = job.result()
+                try:
+                    chat, bad, fixed = job.result()
+                except SystemExit as halt:       # out of credit, a bad key, or the teacher is gone
+                    if not stop:
+                        print(f"Stopping: {halt}")
+                    stop = True
+                    continue
                 rejected += bad
                 repairs += fixed
                 kept = []
@@ -510,7 +594,7 @@ def main() -> None:
                     seen[t["reply"]] = seen.get(t["reply"], 0) + 1
                     firsts[first] = firsts.get(first, 0) + 1
                     replies += 1
-                if kept and made < a.n:
+                if len(kept) >= (2 if a.talk else 1) and made < a.n:
                     chat["turns"] = kept
                     f.write(json.dumps(chat, ensure_ascii=False) + "\n")
                     f.flush()
@@ -520,7 +604,7 @@ def main() -> None:
                         rate = (time.time() - start) / made
                         print(f"{made}/{a.n} chats  ({rejected} rejected)  "
                               f"about {rate * (a.n - made) / 60:.0f} min left", flush=True)
-            if rejected > max(60, 10 * a.n) and rejected > 20 * max(made, 1):
+            if rejected > max(60, min(10 * a.n, 300)) and rejected > 20 * max(made, 1):
                 print(f"Stopping early: {rejected} exchanges rejected against {made} chats kept. "
                       "The teacher is not managing to stay inside her word list.")
                 stop = True
