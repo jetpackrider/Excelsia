@@ -18,21 +18,60 @@ PORT=8080
 OUT="${EXCELSIA_OUT:-/kaggle/working/excelsia_out}"
 SERVER_PID=""
 
+cuda_env() {
+  # PyTorch ships its own copies of the NVIDIA libraries. Put them where the engine can find them.
+  local extra
+  extra=$(python - <<'PY'
+import glob, os, site
+dirs = []
+for sp in site.getsitepackages():
+    dirs += glob.glob(os.path.join(sp, "nvidia", "*", "lib"))
+    dirs += glob.glob(os.path.join(sp, "nvidia", "*", "*", "lib"))
+dirs += [d for d in ("/usr/local/cuda/lib64", "/usr/local/nvidia/lib64") if os.path.isdir(d)]
+print(":".join(dirs))
+PY
+)
+  export LD_LIBRARY_PATH="${extra}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+}
+
+describe() {  # what kind of machine is this? Printed so problems are easy to report.
+  echo "== this machine"
+  nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>&1 | head -4
+  python -c "import sys, torch; print('python', sys.version.split()[0], '| torch', torch.__version__, '| torch CUDA', torch.version.cuda)" 2>&1 | tail -1
+  (nvcc --version 2>/dev/null | tail -2 | head -1) || echo "nvcc: not found"
+  echo "libcuda: $(ldconfig -p 2>/dev/null | awk '/libcuda\.so/{print $NF}' | tr '\n' ' ')"
+}
+
 has_gpu_engine() {
-  python -c "import llama_cpp, sys; sys.exit(0 if llama_cpp.llama_supports_gpu_offload() else 1)" 2>/dev/null
+  # No output hidden: if the ready-built engine can't load, we want to see why.
+  python -c "import llama_cpp, sys; ok = llama_cpp.llama_supports_gpu_offload(); print('ready-built engine sees the GPU:', ok); sys.exit(0 if ok else 1)"
 }
 
 install_engine() {
-  if [ -x /tmp/llama.cpp/build/bin/llama-server ] || has_gpu_engine; then return; fi
+  cuda_env
+  if [ -x /tmp/llama.cpp/build/bin/llama-server ]; then return; fi
+  describe
   echo "== installing the model engine"
-  pip install -q "llama-cpp-python[server]" \
-    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124 || true
-  if has_gpu_engine; then echo "engine: ready-built GPU version"; return; fi
-  echo "ready-built engine can't use this GPU; building llama.cpp instead (about 10 minutes)"
-  apt-get -qq update && apt-get -qq install -y build-essential cmake libcurl4-openssl-dev
+  local major index
+  major=$(python -c "import torch; print((torch.version.cuda or '12').split('.')[0])" 2>/dev/null || echo 12)
+  index="cu124"; [ "$major" = "13" ] && index="cu130"
+  local url="https://abetlen.github.io/llama-cpp-python/whl/$index"
+  # Wheels only: never let pip quietly compile a slow CPU-only copy.
+  pip install -q --force-reinstall --no-deps --only-binary=:all: llama-cpp-python --index-url "$url" \
+    && pip install -q --only-binary=llama-cpp-python "llama-cpp-python[server]" --extra-index-url "$url" \
+    || echo "ready-built engine did not install"
+  if has_gpu_engine; then echo "engine: ready-built GPU version ($index)"; return; fi
+
+  echo "== building llama.cpp instead (about 10 minutes)"
+  (apt-get -qq update; apt-get -qq install -y build-essential cmake) > /tmp/apt.log 2>&1 || true
   [ -d /tmp/llama.cpp ] || git clone -q --depth 1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp
-  cmake /tmp/llama.cpp -B /tmp/llama.cpp/build -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON > /tmp/cmake.log
-  cmake --build /tmp/llama.cpp/build --config Release -j --target llama-server > /tmp/build.log
+  rm -rf /tmp/llama.cpp/build
+  # GGML_CUDA_NO_VMM: Kaggle's image has no libcuda.so for the linker, and this is the
+  # documented switch for building without it. It only changes how GPU memory is pooled.
+  cmake /tmp/llama.cpp -B /tmp/llama.cpp/build -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON \
+    -DGGML_CUDA_NO_VMM=ON > /tmp/cmake.log 2>&1 || { tail -30 /tmp/cmake.log; exit 1; }
+  cmake --build /tmp/llama.cpp/build --config Release -j --target llama-server > /tmp/build.log 2>&1 \
+    || { tail -40 /tmp/build.log; exit 1; }
   echo "engine: built llama.cpp"
 }
 
@@ -65,7 +104,8 @@ stop_server() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; 
 stage="${1:-help}"; shift || true
 case "$stage" in
   check)
-    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || echo "No GPU: turn on the GPU accelerator in the notebook settings."
+    nvidia-smi > /dev/null 2>&1 || echo "No GPU: turn on the GPU accelerator in the notebook settings."
+    describe
     python -m tests.test_excelsia
     ;;
   chats)
