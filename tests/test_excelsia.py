@@ -213,6 +213,10 @@ def test_the_lightweight_version_matches_the_real_one():
     assert int(whole.argmax()) == int(want.argmax())
     out = lite.generate(ids, np.array(tok.speak_mask), tok.end, 12, rng=np.random.default_rng(0))
     assert out and all(tok.speak_mask[t] for t in out)   # the word rule holds here too
+    stuck = lambda o: any(o[i] == o[i + 1] == o[i + 2] for i in range(len(o) - 2))
+    greedy = lite.generate(ids, np.array(tok.speak_mask), tok.end, 16, top_k=1)
+    also = model.generate(torch.tensor([ids]), torch.tensor(tok.speak_mask), tok.end, 16, top_k=1)
+    assert not stuck(greedy) and not stuck(also)         # never one word three times running
 
 
 def test_the_bot_tidies_what_people_type():
@@ -255,8 +259,8 @@ def test_the_bot_keeps_threads_apart_but_shares_her_mood():
     assert Canned.seen[-1].count(tok.user) == REMEMBER + 1             # only the last few exchanges
     assert room.reply(8, 1, "hello", now=20.0)[0] == "peace"           # another channel is untouched
     # clearing her memory: one person's thread, then the whole channel
-    from bot.talk import RESET_REPLY
-    assert tok.can_say(RESET_REPLY)[0]              # even this is said in her own words
+    from bot.talk import NOT_HERE, RESET_REPLY
+    assert tok.can_say(RESET_REPLY)[0] and tok.can_say(NOT_HERE)[0]   # said in her own words
     room.reply(7, 2, "what about the city", now=21.0)
     room.forget(7, 1)
     room.reply(7, 1, "hello again", now=22.0)

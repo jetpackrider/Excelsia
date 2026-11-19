@@ -12,8 +12,8 @@ from excelsia.tokenizer import Tokenizer
 LONGEST = 300          # characters of a message she will read
 FORGET_AFTER = 30 * 60  # seconds of quiet before a thread, or her mood, starts fresh
 REMEMBER = 2           # earlier exchanges with the same person she keeps in view
-RESET_WORDS = ("!reset", "!forget")  # typed alone in her channel, these clear her memory
-RESET_REPLY = "All is new."          # said in her own words, like everything else
+RESET_REPLY = "All is new."       # what /reset answers, in her own words like everything else
+NOT_HERE = "Not within this place."  # /reset used outside her channel
 PAUSE = 1.5            # seconds one person must wait between messages
 
 
@@ -46,8 +46,9 @@ class Room:
         return False
 
     def forget(self, channel: int, person: int | None = None) -> None:
-        """Wipe one person's thread in a channel, or (with no person) the whole channel:
-        every thread there and her mood."""
+        """Wipe the whole channel (every thread there, and her mood), or with a person
+        named, just that person's thread. She keeps her memory only in here, never by
+        reading back through Discord, so after this nothing earlier can reach her."""
         if person is not None:
             self.talks.pop((channel, person), None)
             return

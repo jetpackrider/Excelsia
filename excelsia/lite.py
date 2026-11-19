@@ -92,6 +92,8 @@ class LiteGPT:
             s[~allowed] = -np.inf
             if step == 0:
                 s[[stop] + (not_first or [])] = -np.inf  # open with a word
+            if len(out) >= 2 and out[-1] == out[-2]:
+                s[out[-1]] = -np.inf  # never the same word three times running
             if top_k:
                 kth = np.sort(s)[-min(top_k, int(allowed.sum()))]
                 s[s < kth] = -np.inf

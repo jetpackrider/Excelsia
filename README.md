@@ -142,6 +142,10 @@ The token is typed blind and goes straight to Fly as a secret. It is never
 written to a file in this folder. To update her later, export again and rerun
 the script.
 
+In the channel, each person has their own thread with her and her mood is shared
+by everyone. Her replies begin with her mood in brackets. Moderators can use
+`/reset` to clear her memory and mood.
+
 ## Where the training data comes from
 
 - The New York State Constitution (public law).

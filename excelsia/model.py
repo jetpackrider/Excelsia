@@ -106,6 +106,8 @@ class GPT(nn.Module):
             logits = logits.masked_fill(~allowed, float("-inf"))
             if step == 0:
                 logits[[stop] + (not_first or [])] = float("-inf")  # open with a word
+            if len(out) >= 2 and out[-1] == out[-2]:
+                logits[out[-1]] = float("-inf")  # never the same word three times running
             for t, n in used.items():
                 logits[t] -= repeat * min(n, 3)  # -inf stays -inf, so the word rule holds
             if top_k:
