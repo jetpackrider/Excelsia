@@ -1,0 +1,132 @@
+# Excelsia
+
+A tiny language model who believes she is the State of New York and can only
+speak words that appear in the New York State Constitution.
+
+She understands ordinary English. She just can't answer in it. She can't say her
+own name either, since "Excelsia" isn't in the constitution. Ask who she is and
+she will insist she is New York. The constitution
+has no "you", "yes", "hello", "love", "happy" or "sad", so she has to work around
+all of them. It does have "grateful", "pain", "cruel", "forever", "wild" and
+"notwithstanding".
+
+## How the rule is enforced
+
+Her vocabulary has two parts:
+
+| | Count | Source |
+|---|---|---|
+| Words she can say | 3,168 | Every word in the constitution, and nothing else |
+| Words she can only read | 7,154 | Everyday English and her own name, so she can follow a conversation |
+
+When she generates a reply, every token outside the first group has its score
+set to minus infinity before sampling. A word outside the constitution is not
+filtered out afterwards. It can never be picked in the first place. The test
+suite checks this with a random, untrained model sampled as wildly as possible.
+
+The word list comes from the Department of State's edition of the constitution
+with amendments effective January 1, 2026. It includes the section headings and
+amendment notes printed in that edition, and leaves out the cover page, table of
+contents and page furniture. `excelsia/words.py` rebuilds it from the raw text.
+
+## Moods
+
+She has six moods, each named with one of her own words: `grateful`, `pleasure`,
+`peace`, `alone`, `pain`, `offense`. The mood is tracked outside the model
+(`excelsia/chat.py`) and handed to it as a tag before each reply. Kind words
+lift it, unkind words sink it, and it fades back toward calm. Her memory is
+short (a few exchanges), so her feelings usually outlast what caused them.
+
+## Building her
+
+Needs Python 3.9+ and about 10 GB of free disk (most of that is the teacher model in step 2). Written for an Apple Silicon Mac
+(it uses the GPU through PyTorch's `mps` backend) but runs anywhere PyTorch does.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m tests.test_excelsia
+```
+
+**1. Teach her English.** Downloads part of the public TinyStories dataset and
+trains on it together with the constitution itself.
+
+```bash
+python -m excelsia.train stories
+python -m excelsia.train pretrain --minutes 45
+python -m excelsia.chat --ckpt pretrain.pt     # she babbles, but only in her words
+```
+
+**2. Have a local model write practice chats.** The teacher is Gemma running on
+your own machine through llama.cpp. Her lines are generated through a grammar
+built from the word list, so the teacher cannot hand her a forbidden word.
+
+```bash
+brew install llama.cpp
+llama-server -hf unsloth/gemma-4-12b-it-GGUF:Q4_K_M -c 16384    # leave running
+python -m excelsia.gen_chats --n 300                             # in a second window
+```
+
+Every exchange is checked before it is kept: forbidden words, replies cut off
+mid-sentence, a word repeated three times running, and repeated replies are all
+thrown out.
+
+Read `data/chats.jsonl` before going further. If the chats are bad, the model
+will be too.
+
+**3. Teach her to be Excelsia.**
+
+```bash
+python -m excelsia.train finetune
+python -m excelsia.chat
+```
+
+## Running it on a free Kaggle GPU
+
+The laptop is enough to prove everything works. A free Kaggle notebook is faster
+and can run Gemma without a 7 GB download at home.
+
+1. Push this repository to GitHub.
+2. On Kaggle, create a notebook from `kaggle/excelsia.ipynb`, set the accelerator
+   to a GPU and turn internet on.
+3. Put your repository's address in the first cell and run the cells in order.
+
+`scripts/kaggle.sh` does the work, one stage per cell: `check`, `chats`,
+`english`, `excelsia`, `pack`.
+
+## Where the training data comes from
+
+- The New York State Constitution (public law).
+- [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), a public dataset.
+- Practice chats written by an open-weight model run locally.
+
+By default no training text comes from a hosted AI service, so no service's
+terms on training with its outputs come into it. `gen_chats` can also point at a
+hosted OpenAI-style API (`--no-grammar --model ... --key-env ...`). Only do that
+with a service whose current terms allow training on its output, and read those
+terms yourself first.
+
+## Status
+
+Tested: the word list, the tokenizer, the speaking mask, and the English stage on
+an Apple Silicon laptop (about 9,500 words a second for the small model). The
+chat generator has been run end to end against a small stand-in model, with the
+grammar holding every reply inside the word list.
+
+Not yet tested: Gemma itself as the teacher, so how good its chats are is still
+the open question. The Kaggle script has not been run on Kaggle yet either.
+
+## Layout
+
+```
+excelsia/words.py       constitution text -> word list
+excelsia/tokenizer.py   vocabulary and the speaking mask
+excelsia/model.py       a small GPT
+excelsia/train.py       stories / pretrain / finetune
+excelsia/gen_chats.py   practice chats from a local teacher model
+excelsia/chat.py        talk to her; mood tracker
+scripts/kaggle.sh       the same pipeline on a free Kaggle GPU
+kaggle/excelsia.ipynb   notebook that calls it
+data/                   constitution text, word lists, vocabulary
+tests/                  the checks
+```
