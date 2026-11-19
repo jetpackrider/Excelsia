@@ -86,12 +86,15 @@ h1 {
 
 .talk { width: min(100%, 40rem); display: flex; flex-direction: column; gap: 14px; }
 .said {
-  display: flex; flex-direction: column; gap: 10px; justify-content: flex-end;
-  max-height: 46vh; overflow-y: auto; scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 34%);
-          mask-image: linear-gradient(to bottom, transparent 0, #000 34%);
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: 46vh; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--ink-faint) transparent;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 22%);
 }
-.said::-webkit-scrollbar { display: none; }
+.said > :first-child { margin-top: auto; }   /* sits at the bottom when short, scrolls back when long */
+.said::-webkit-scrollbar { width: 6px; }
+.said::-webkit-scrollbar-thumb { background: var(--ink-faint); border-radius: 3px; }
 .turn { display: flex; flex-direction: column; gap: 2px; text-shadow: 0 1px 14px rgba(6, 12, 20, 0.75); }
 .turn .you { color: var(--ink-soft); margin: 0; }
 .turn .her {
@@ -121,8 +124,10 @@ form { display: flex; gap: 10px; align-items: stretch; }
   box-shadow: 0 10px 30px rgba(4, 10, 16, 0.35);
 }
 .say:disabled { opacity: 0.55; cursor: default; }
-.under { display: flex; justify-content: space-between; gap: 12px; color: var(--ink-faint); font-size: 0.95rem; }
+.under { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 18px; color: var(--ink-faint); font-size: 0.95rem; }
 .under .plainlink { color: var(--ink-soft); padding: 0; }
+.under .links { display: flex; gap: 18px; }
+#copy-box { width: 100%; min-height: 12rem; font: inherit; font-size: 0.95rem; color: var(--birch-ink); background: #fffaf0; border: 1px solid rgba(29, 42, 44, 0.3); border-radius: 4px; padding: 10px; }
 :focus-visible { outline: 3px solid var(--ember); outline-offset: 3px; }
 
 .waking { display: flex; flex-direction: column; gap: 8px; text-shadow: 0 1px 14px rgba(6, 12, 20, 0.75); }
@@ -180,7 +185,10 @@ dialog .close { align-self: flex-start; font: inherit; font-weight: 700; backgro
     </form>
     <div class="under" id="under" hidden>
       <span>The sky follows her mood.</span>
-      <button class="plainlink" id="forget" type="button">Start over</button>
+      <span class="links">
+        <button class="plainlink" id="copy" type="button">Copy conversation</button>
+        <button class="plainlink" id="forget" type="button">Start over</button>
+      </span>
     </div>
   </main>
 </div>
@@ -190,9 +198,18 @@ dialog .close { align-self: flex-start; font: inherit; font-weight: 700; backgro
     <h2 id="about-title">About her</h2>
     <p>Excelsia is a very small language model, built from nothing: about 18 million numbers, trained on children's stories, the New York State Constitution, and three thousand practice conversations.</p>
     <p>She can read ordinary English. But each time she chooses a word, every word that is not printed in the constitution is ruled out, so she has to talk her way around everything else. She has no word for "you", which is why she says "this one" or "a citizen". People call her Excelsia. She cannot say it, and insists she is New York.</p>
-    <p>She runs here, in your browser. Nothing you type is sent anywhere, and she forgets it when you close the page. She keeps only the last couple of exchanges in mind, so she is better at feeling than at facts.</p>
+    <p>She runs here, in your browser. Nothing you type is sent anywhere, and she forgets it when you close the page. She answers each thing you say on its own and carries only her mood forward, so she is better at feeling than at facts.</p>
     <p>How she was made: <a href="https://github.com/jetpackrider/Excelsia" target="_blank" rel="noopener">github.com/jetpackrider/Excelsia</a></p>
     <button class="close" id="about-close" type="button">Back to the lake</button>
+  </div>
+</dialog>
+
+<dialog id="copy-dialog" aria-labelledby="copy-title">
+  <div class="inside">
+    <h2 id="copy-title">The conversation</h2>
+    <p>Your browser would not copy it for you. Select the text below and copy it yourself.</p>
+    <textarea id="copy-box" readonly aria-label="The conversation so far"></textarea>
+    <button class="close" id="copy-close" type="button">Back to the lake</button>
   </div>
 </dialog>
 
@@ -536,6 +553,7 @@ requestAnimationFrame(draw);
 const $ = (id) => document.getElementById(id);
 const said = $("said"), feeling = $("feeling"), form = $("form"), words = $("words"), sayButton = $("say");
 let worker = null, busy = false, current = null, turnId = 0;
+const record = [];                           // everything said, for the Copy conversation button
 
 let home = null;                             // the folder her files sit in, beside this page
 function here(file) { return new URL(file, home).href; }
@@ -587,6 +605,7 @@ function say(text, quiet) {
   if (busy || !worker) return;
   setBusy(true);
   current = addTurn(quiet ? "" : text);
+  current.you = quiet ? "" : text;
   feeling.innerHTML = 'She is thinking<span class="dots"></span>';
   worker.postMessage({ type: "say", text, id: ++turnId });
 }
@@ -601,9 +620,24 @@ form.addEventListener("submit", (e) => {
 
 $("forget").addEventListener("click", () => {
   if (busy || !worker) return;
-  said.textContent = ""; setMood("peace");
+  said.textContent = ""; setMood("peace"); record.length = 0;
   worker.postMessage({ type: "forget" });
 });
+
+$("copy").addEventListener("click", async () => {
+  const text = record.map((r) => (r.you ? "you: " + r.you + "\n" : "") + "excelsia [" + r.mood + "]: " + r.her).join("\n\n");
+  const button = $("copy");
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = "Copied";
+    setTimeout(() => { button.textContent = "Copy conversation"; }, 1800);
+  } catch (refused) {                        // some browsers and frames do not allow it
+    $("copy-box").value = text;
+    $("copy-dialog").showModal();
+    $("copy-box").select();
+  }
+});
+$("copy-close").addEventListener("click", () => $("copy-dialog").close());
 
 const about = $("about");
 $("about-open").addEventListener("click", () => about.showModal());
@@ -654,6 +688,7 @@ async function wake() {
       else if (m.type === "word" && m.id === turnId) showWords(m.text);
       else if (m.type === "done" && m.id === turnId) {
         showWords(m.text); setMood(m.mood);
+        record.push({ you: current ? current.you : "", mood: m.mood, her: m.text });
         feeling.textContent = FEELING[m.mood] || "";
         current = null; setBusy(false); words.disabled = false;
         if (matchMedia("(pointer: fine)").matches) words.focus();

@@ -11,7 +11,9 @@ from excelsia.tokenizer import Tokenizer
 
 LONGEST = 300          # characters of a message she will read
 FORGET_AFTER = 30 * 60  # seconds of quiet before a thread, or her mood, starts fresh
-REMEMBER = 2           # earlier exchanges with the same person she keeps in view
+# Earlier exchanges with the same person she keeps in view. None: shown her own earlier
+# replies, she copies them instead of answering what was just said. Her mood carries over.
+REMEMBER = 0
 RESET_REPLY = "All is new."       # what /reset answers, in her own words like everything else
 NOT_HERE = "Not within this place."  # /reset used outside her channel
 PAUSE = 1.5            # seconds one person must wait between messages
@@ -30,8 +32,8 @@ class Room:
     with her, so a follow-up connects to that person's last message and not to someone
     else's. Her mood is shared by the whole channel: one rude guest sours her for all."""
 
-    def __init__(self, model: LiteGPT, tok: Tokenizer | None = None):
-        self.model, self.tok = model, tok or Tokenizer()
+    def __init__(self, model: LiteGPT, tok: Tokenizer | None = None, remember: int = REMEMBER):
+        self.model, self.tok, self.remember = model, tok or Tokenizer(), remember
         self.talks: dict[tuple[int, int], tuple[Excelsia, float]] = {}
         self.moods: dict[int, tuple[Mood, float]] = {}
         self.last: dict[int, float] = {}
@@ -63,7 +65,7 @@ class Room:
             mood = Mood()
         talk, seen = self.talks.get((channel, person), (None, 0.0))
         if talk is None or now - seen > FORGET_AFTER:
-            talk = Excelsia(self.model, self.tok, remember=REMEMBER)
+            talk = Excelsia(self.model, self.tok, remember=self.remember)
         talk.mood = mood
         said = talk.reply(text)
         self.moods[channel] = (mood, now)

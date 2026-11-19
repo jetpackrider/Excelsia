@@ -237,7 +237,7 @@ def test_the_bot_makes_people_wait_their_turn():
 
 
 def test_the_bot_keeps_threads_apart_but_shares_her_mood():
-    from bot.talk import REMEMBER, Room
+    from bot.talk import Room
 
     class Canned:
         block, seen = 256, []
@@ -245,7 +245,7 @@ def test_the_bot_keeps_threads_apart_but_shares_her_mood():
             Canned.seen.append(list(ids))
             return tok.encode("the waters remain.")
 
-    room = Room(model=Canned(), tok=tok)
+    room = Room(model=Canned(), tok=tok, remember=2)   # with a memory, to test the threads
     forest, city = tok.stoi["forest"], tok.stoi["city"]
     assert room.reply(7, 1, "you are wonderful, thank you", now=0.0) == ("pleasure", "The waters remain.")
     room.reply(7, 1, "tell me about the forest", now=1.0)
@@ -256,7 +256,11 @@ def test_the_bot_keeps_threads_apart_but_shares_her_mood():
     assert forest in Canned.seen[-1] and city not in Canned.seen[-1]   # person 1's thread carries on
     for i in range(5):
         room.reply(7, 1, "more", now=4.0 + i)
-    assert Canned.seen[-1].count(tok.user) == REMEMBER + 1             # only the last few exchanges
+    assert Canned.seen[-1].count(tok.user) == 2 + 1                    # only the last few exchanges
+    fresh = Room(model=Canned(), tok=tok)                              # by default she keeps none
+    fresh.reply(7, 1, "tell me about the forest", now=0.0)
+    fresh.reply(7, 1, "and then?", now=1.0)
+    assert forest not in Canned.seen[-1] and Canned.seen[-1].count(tok.user) == 1
     assert room.reply(8, 1, "hello", now=20.0)[0] == "peace"           # another channel is untouched
     # clearing her memory: one person's thread, then the whole channel
     from bot.talk import NOT_HERE, RESET_REPLY

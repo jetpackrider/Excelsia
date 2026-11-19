@@ -20,7 +20,9 @@ const UNKIND = new Set(("hate stupid dumb ugly bad worst shut boring useless idi
 const LEAVING = new Set("bye goodbye leaving leave gone goodnight later farewell".split(" "));
 const TOKEN = /<[a-z:]+>|[a-z]+(?:'[a-z]+)?|[0-9]+|[.,?!;:'"()\-]/g;
 const FOLD = { "‘": "'", "’": "'", "“": '"', "”": '"', "—": "-", "–": "-" };
-const REMEMBER = 2;   // earlier exchanges she keeps in view
+// Earlier exchanges she keeps in view. None: shown her own earlier replies, she copies
+// them instead of answering what was just said. Her mood is what carries over.
+const REMEMBER = 0;
 const MAX_NEW = 48;   // the longest reply she may give, in words and marks
 
 /* ---------------------------------------------------------------- her mood */
@@ -234,6 +236,7 @@ class Excelsia {
     this.model = new Model(buffer);
     this.tok = new Tokenizer(this.model.vocab);
     this.mood = new Mood();
+    this.remember = REMEMBER;
     this.turns = [];
     this.fed = [];                                       // the tokens now sitting in the model's cache
     this.scratch = new Float64Array(this.tok.speakIds.length);
@@ -246,7 +249,8 @@ class Excelsia {
     const tok = this.tok, model = this.model, ids = tok.speakIds, s = this.scratch;
     const mood = this.mood.hear(text);
     const asked = [tok.user].concat(tok.encode(text).slice(0, 120), [tok.mood(mood), tok.excelsia]);
-    let prompt = [].concat(...this.turns.slice(-REMEMBER), asked);
+    const before = this.remember > 0 ? this.turns.slice(-this.remember) : [];
+    let prompt = [].concat(...before, asked);
     prompt = prompt.slice(-(model.block - MAX_NEW));     // she only sees what fits
     // Whatever she has already read at the same positions need not be read again.
     let same = 0;
