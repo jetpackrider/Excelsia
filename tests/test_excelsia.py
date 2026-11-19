@@ -143,7 +143,7 @@ def test_the_tally_notices_what_she_leans_on():
     tally = Tally(cap=0.15, after=10)
     for i in range(10):
         tally.add(tok.split("the people remain." if i < 6 else "the waters are near."))
-    assert tally.tired[0] == "people"      # in 6 of 10 replies
+    assert set(tally.tired[:2]) == {"people", "remain"}   # each in 6 of 10 replies
     assert "the" not in tally.tired        # little words never count
     assert "near" in tally.tired           # 4 of 10 is over the cap as well
 
@@ -184,6 +184,52 @@ def test_grammar_spells_exactly_her_words():
     grammar = build_grammar(tok.vocab["speak"])
     assert grammar.startswith("root ::=") and "word ::= " + start in grammar
 
+def test_the_lightweight_version_matches_the_real_one():
+    """The Discord bot runs her in plain numpy. It must give the same scores as PyTorch."""
+    import tempfile
+    from pathlib import Path
+    import numpy as np
+    from excelsia.export import export
+    from excelsia.lite import LiteGPT
+    from excelsia.train import save
+    torch.manual_seed(0)
+    model = GPT(Config(vocab_size=len(tok), block_size=32, n_layer=2, n_head=2, n_embd=32)).eval()
+    with torch.no_grad():
+        for p in model.parameters():      # a fresh model is nearly all zeros where it
+            p.add_(torch.randn_like(p) * 0.2)  # matters; shake it so the test means something
+    ids = [tok.user] + tok.encode("hello there, who are you?") + [tok.mood("peace"), tok.excelsia]
+    with torch.no_grad():
+        want = model(torch.tensor([ids]))[0][0, -1].numpy()
+    with tempfile.TemporaryDirectory() as d:
+        save(model, Path(d) / "m.pt", 0, "finetune")
+        export(Path(d) / "m.pt", Path(d) / "m.npz")
+        lite = LiteGPT(Path(d) / "m.npz")
+    cache = [None] * lite.layers
+    whole = lite._scores(ids, 0, cache)
+    cache = [None] * lite.layers
+    for i, t in enumerate(ids):           # and again one word at a time, through the cache
+        stepped = lite._scores([t], i, cache)
+    assert np.abs(whole - want).max() < 0.05 and np.abs(stepped - want).max() < 0.05
+    assert int(whole.argmax()) == int(want.argmax())
+    out = lite.generate(ids, np.array(tok.speak_mask), tok.end, 12, rng=np.random.default_rng(0))
+    assert out and all(tok.speak_mask[t] for t in out)   # the word rule holds here too
+
+
+def test_the_bot_tidies_what_people_type():
+    from bot.talk import LONGEST, tidy
+    assert tidy("@Excelsia   hello\nthere", ("Excelsia",)) == "hello there"
+    assert tidy("look https://example.com/x <:wave:123> hi") == "look hi"
+    assert tidy("@Excelsia", ("Excelsia",)) == ""
+    assert len(tidy("word " * 500)) <= LONGEST
+
+
+def test_the_bot_makes_people_wait_their_turn():
+    from bot.talk import PAUSE, Room
+    room = Room(model=None, tok=tok)
+    assert not room.too_soon(1, now=100.0)
+    assert room.too_soon(1, now=100.0 + PAUSE / 2)       # same person, too quick
+    assert not room.too_soon(2, now=100.0 + PAUSE / 2)   # someone else is fine
+    assert not room.too_soon(1, now=100.0 + PAUSE * 2)
 
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):

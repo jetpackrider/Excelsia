@@ -1,0 +1,9 @@
+.git
+.venv
+work
+tests
+kaggle
+scripts
+data/chats.jsonl
+data/source
+**/__pycache__

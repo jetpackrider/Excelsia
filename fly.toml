@@ -1,0 +1,10 @@
+# Fly.io settings for the Discord bot. The app's name is not kept here:
+# scripts/fly.sh asks for one the first time and passes it on the command line.
+primary_region = "ewr"
+swap_size_mb = 256   # a cushion: she needs about 200 MB and the machine has 256
+
+[build]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

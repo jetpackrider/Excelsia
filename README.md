@@ -123,6 +123,25 @@ become rarer or more common everywhere, and saves the result as a new file. It
 is a blunt tool: it changes which words she reaches for, not what she has to
 say. Try `--up forest waters trees --by 3` to see it plainly.
 
+## Putting her on Discord
+
+She can live in a Discord channel and answer everyone who talks there. The bot
+runs her with plain numpy (no PyTorch), so it fits on the smallest Fly.io machine.
+
+1. In Discord's developer portal, make an application with a bot, turn on
+   **Message Content Intent**, and invite it to your server with permission to
+   read and send messages.
+2. Pack her and send her up:
+
+```bash
+python -m excelsia.export        # work/excelsia.pt -> bot/excelsia.npz
+bash scripts/fly.sh              # asks for the bot token and channel id once
+```
+
+The token is typed blind and goes straight to Fly as a secret. It is never
+written to a file in this folder. To update her later, export again and rerun
+the script.
+
 ## Where the training data comes from
 
 - The New York State Constitution (public law).
@@ -163,6 +182,10 @@ excelsia/train.py       stories / pretrain / finetune
 excelsia/gen_chats.py   practice chats written by a teacher model
 excelsia/chat.py        talk to her; mood tracker
 excelsia/tweak.py       turn words up or down by editing her weights
+excelsia/lite.py        the same model in plain numpy, for small servers
+excelsia/export.py      pack her into the file lite.py reads
+bot/                    the Discord bot
+Dockerfile, fly.toml    how the bot is run on Fly.io
 scripts/kaggle.sh       the same pipeline on a free Kaggle GPU
 kaggle/excelsia.ipynb   notebook that calls it
 data/                   constitution text, word lists, vocabulary
