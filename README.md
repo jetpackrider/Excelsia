@@ -112,21 +112,29 @@ one at a time as they are written.
 
 - The New York State Constitution (public law).
 - [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), a public dataset.
-- Practice chats written by an open-weight model run locally.
+- The 3,000 practice chats in `data/chats.jsonl`, written by DeepSeek's hosted API
+  (the `deepseek-flash` model) in November 2026 with `--teacher deepseek`.
 
-With the default local teacher, no training text comes from a hosted AI service,
-so no service's terms on training with its outputs come into it. If you use a
-hosted teacher, say so here and name it.
+DeepSeek's API terms allowed using its output to train other models when these
+chats were written. Terms change, so read the current ones before making more.
+Many hosted AI services do not allow this at all. If you would rather no hosted
+service be involved, delete `data/chats.jsonl` and write your own with the default
+local teacher.
 
 ## Status
 
 Tested: the word list, the tokenizer, the speaking mask, and the English stage on
 an Apple Silicon laptop (about 9,500 words a second for the small model). The
-chat generator has been run end to end against a small stand-in model, with the
-grammar holding every reply inside the word list.
+Kaggle script has run end to end on Kaggle's free T4 GPUs. The chat writer has
+produced the 3,000 chats here, and every reply in them passes the word check.
 
-Not yet tested: Gemma itself as the teacher, so how good its chats are is still
-the open question. The Kaggle script has not been run on Kaggle yet either.
+What we learned about teachers: forcing Gemma's letters through a grammar kept
+every word legal but wrecked the meaning, because a word she lacks got swapped
+for one spelled alike. Letting the teacher write freely and repairing by meaning
+fixed that. Gemma has not been tried with the new method yet.
+
+Not yet tested: the last training step on these chats, so how well she herself
+talks is still the open question.
 
 ## Layout
 
