@@ -31,6 +31,7 @@ PORT=8080
 CTX="${EXCELSIA_CTX:-8192}"    # room for the word list plus a short conversation
 OUT="${EXCELSIA_OUT:-/kaggle/working/excelsia_out}"
 PIDS=()
+ONE_COPY=""
 
 cuda_env() {
   # PyTorch ships its own copies of the NVIDIA libraries. Put them where the engine can find them.
@@ -73,7 +74,8 @@ build_llama() {
   # documented switch for building without it. It only changes how GPU memory is pooled.
   cmake /tmp/llama.cpp -B /tmp/llama.cpp/build -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON \
     -DGGML_CUDA_NO_VMM=ON > /tmp/cmake.log 2>&1 || { tail -30 /tmp/cmake.log; return 1; }
-  cmake --build /tmp/llama.cpp/build --config Release -j --target llama-server > /tmp/build.log 2>&1 &
+  # A fixed number of compile jobs. A bare -j starts every job at once and runs out of memory.
+  cmake --build /tmp/llama.cpp/build --config Release -j "$(nproc)" --target llama-server > /tmp/build.log 2>&1 &
   local bp=$!
   while kill -0 "$bp" 2>/dev/null; do sleep 60; echo "  still building ($(wc -l < /tmp/build.log) lines of compiler output so far)"; done
   wait "$bp" || { tail -40 /tmp/build.log; return 1; }
@@ -105,6 +107,7 @@ install_engine() {
   echo "== installing the ready-built engine"
   install_wheel || { echo "No working model engine. Paste everything above to get help."; exit 1; }
   echo "engine: ready-built"
+  ONE_COPY=1  # this engine needs far more memory per copy, so never run two of it
 }
 
 get_model() {
@@ -146,6 +149,7 @@ run_chats() {  # run_chats <how many> <gpu numbers...>   one copy of Gemma per G
   local gpus=("$@") g i=0
   mkdir -p "$OUT"
   install_engine
+  if [ -n "${ONE_COPY:-}" ] && [ "${#gpus[@]}" -gt 1 ]; then gpus=("${gpus[0]}"); fi
   get_model
   trap stop_servers EXIT
   echo "== starting ${#gpus[@]} copy/copies of the model server"
