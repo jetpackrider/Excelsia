@@ -132,7 +132,26 @@ Every word she is allowed to say:
 {words}
 """
 
+# Who is typing. One is picked per chat so the people she hears from do not all sound alike.
+VOICES = """a child
+a teenager who types in lower case with almost no punctuation
+a tourist visiting New York for the first time
+someone who has lived upstate all their life
+a commuter in a hurry who writes only a few words
+a student doing homework
+a grandparent who writes full, careful sentences
+someone who is skeptical of chatbots
+someone chatting late at night who rambles a little
+a farmer
+a shopkeeper in the city
+someone who gets straight to the point with no greeting
+someone who always says hello first
+someone who asks one short question at a time
+a teacher
+someone new to the state who is curious about everything""".splitlines()
+
 PERSON_TASK = """Write the next message from the person talking to Excelsia.
+Who is typing: {voice}. Do not have them say who they are; it only shapes how they write.
 Situation: the person is {topic}.
 The person's manner: {manner}. The manner only colours how they say it; keep to the situation.
 {so_far}Write only the person's message, spoken directly to her ("you"), never about her:
@@ -329,15 +348,16 @@ def transcript(turns: list[dict], pending: str | None = None) -> str:
 def make_chat(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random, tries: int,
               grammar: str | None) -> tuple[dict, int, int]:
     """Write one chat. Returns (chat, exchanges rejected, repair passes used)."""
-    topic, mood = rng.choice(TOPICS), rng.choice(MOODS)
+    topic, mood, voice = rng.choice(TOPICS), rng.choice(MOODS), rng.choice(VOICES)
     turns: list[dict] = []
     rejected = repairs = 0
-    for _ in range(rng.choices([1, 2, 3], [5, 3, 2])[0]):
+    # Mostly real back-and-forth. Four exchanges is about what fits in her memory at once.
+    for _ in range(rng.choices([1, 2, 3, 4], [2, 3, 3, 2])[0]):
         feeling, manner = FEELINGS[mood]
         user = clean(teacher.ask([
             {"role": "system", "content": system},
             {"role": "user", "content": PERSON_TASK.format(
-                topic=topic if not turns else "carrying on the same conversation",
+                voice=voice, topic=topic if not turns else "carrying on the same conversation",
                 manner=manner, so_far=transcript(turns))}], 1.0, 80))
         reply, used = write_reply(teacher, tok, system, EXCELSIA_TASK.format(
             so_far=transcript(turns, user), feeling=feeling), tries, grammar)
@@ -395,6 +415,7 @@ def main() -> None:
     out, rng = Path(a.out), random.Random(a.seed)
     seen: dict[str, int] = {}
     firsts: dict[str, int] = {}
+    asked: set[str] = set()
     written: list[dict] = []
     made = rejected = repairs = replies = 0
     start = time.time()
@@ -412,11 +433,16 @@ def main() -> None:
                     first = tok.split(t["reply"])[0]
                     # Across the whole set: no line said more than twice, and no single
                     # opening word allowed to take over.
-                    overused = replies >= 40 and firsts.get(first, 0) > 0.30 * replies
-                    if seen.get(t["reply"], 0) >= 2 or overused:
+                    # Plain English leans on "the", "a" and "i", so they get more room.
+                    cap = 0.50 if first in ("the", "a", "i") else 0.30
+                    overused = replies >= 40 and firsts.get(first, 0) > cap * replies
+                    opener = t["user"].lower() if not kept else None
+                    if seen.get(t["reply"], 0) >= 2 or overused or opener in asked:
                         rejected += 1
                         break
                     kept.append(t)
+                    if opener:
+                        asked.add(opener)  # no two chats may start with the very same message
                     seen[t["reply"]] = seen.get(t["reply"], 0) + 1
                     firsts[first] = firsts.get(first, 0) + 1
                     replies += 1
