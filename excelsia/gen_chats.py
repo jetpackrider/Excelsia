@@ -671,10 +671,29 @@ Her lines: only her allowed words, in lower case, one or two small sentences, ab
 fourteen words in all, said simply, the way a child would. Each one answers the message
 just before it specifically; if the person changes the subject, she goes with them. She
 never reuses a sentence and never quotes the constitution's legal wording. Her grammar is
-right: "this one shall go", never "this one go". Vary how her lines begin. In her lines use
+right: "this one shall go", never "this one go". Vary how her lines begin, and do not end
+every line with a question: at most every other line of hers asks one. In her lines use
 no dashes, quotation marks or brackets: only . , ? and !
-{tired}Write exactly {lines} lines and nothing else, starting each line with P: for the person
+{palette}{tired}Write exactly {lines} lines and nothing else, starting each line with P: for the person
 and E: for Excelsia, alternating, starting with P:"""
+
+_EVERYDAY: list[str] = []
+
+
+def palette(rng: random.Random, tired: tuple[str, ...] = (), n: int = 12) -> str:
+    """A different handful of her words for each conversation, drawn from words other
+    teachers used naturally in her lines (data/everyday_words.txt), so she does not
+    say the same few things in every chat."""
+    if not _EVERYDAY:
+        path = DATA / "everyday_words.txt"
+        _EVERYDAY.extend(path.read_text(encoding="utf-8").split() if path.exists() else [])
+    pool = [w for w in _EVERYDAY if w not in tired]
+    if not pool:
+        return ""
+    words = rng.sample(pool, min(n, len(pool)))
+    return ("For variety, some words of hers that could fit somewhere in this chat (use a few "
+            "where they come naturally, not all): " + ", ".join(words) + ".\n")
+
 
 _LINE = re.compile(r"^\s*\**\s*(p|person|e|excelsia)\s*\**\s*[:\uff1a]\s*(.*)$", re.I)
 
@@ -721,8 +740,8 @@ def make_whole(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random
         moods.append(mood)
     tired = tuple(tally.tired) if tally else ()
     draft = teacher.ask([{"role": "system", "content": system}, {"role": "user", "content": WHOLE_TALK.format(
-        n=n, voice=voice, plan="\n".join(plan), lines=2 * n,
-        tired=TIRED.format(words=", ".join(tired)) if tired else "")}], 0.9, 90 * n)
+        n=n, voice=voice, plan="\n".join(plan), lines=2 * n, palette=palette(rng, tired),
+        tired=TIRED.format(words=", ".join(tired)) if tired else "")}], 1.0, 90 * n)
     turns: list[dict] = []
     rejected = repairs = 0
     for (user, line), mood in zip(parse_whole(draft), moods):
