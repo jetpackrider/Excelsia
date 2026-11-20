@@ -149,6 +149,11 @@ Everyday words she does NOT have, so never use them in her lines:
 {missing}
 In particular she cannot say "am". She says "i shall be", "i remain", or just names the thing.
 
+Many plural and -s forms are missing even when the plain word is there: she has "forest"
+but not "forests", "lake" but not "lakes", "remain" but not "remains". Check the list.
+Words people often reach for that she does not have, and what she can say instead:
+{instead}
+
 Every word she is allowed to say:
 {words}
 """
@@ -223,6 +228,69 @@ same thing.
 Use only her allowed words, in lower case. Keep it short: one or two small sentences,
 about four to fourteen words in all, said simply, the way a child would. Never quote or
 copy the constitution's legal wording. {tired}Write only her reply."""
+
+# What she can say instead of words people often reach for. Every suggestion is checked
+# against her list when it is used, so a word missing from the constitution is dropped.
+INSTEAD = {
+    "stay": "keep near, continue, remain", "stays": "continue, remain", "wait": "keep, remain",
+    "rest": "remain still", "sleep": "remain still", "here": "in this place, near, now",
+    "am": "shall be", "me": "i, my, my own", "mine": "my own", "you": "the person, this one",
+    "words": "speech, language", "word": "speech", "quiet": "still, at peace", "silent": "still",
+    "silence": "peace", "calm": "still, at peace", "empty": "vacant",
+    "woods": "forest, trees, wilderness", "joy": "pleasure", "glad": "grateful, content",
+    "happy": "content, grateful", "kindness": "care, good will", "love": "care, care for",
+    "dear": "good", "leave": "go, go away", "leaves": "go away", "tall": "high, great",
+    "big": "great, large", "halls": "house, home, place", "rooms": "house, home",
+    "grow": "increase", "safe": "secure, in safety", "help": "aid, care for",
+    "hurt": "injury, pain", "harm": "injury", "wound": "injury", "sorrow": "pain",
+    "sad": "in pain, alone", "thank": "grateful", "thanks": "grateful", "yes": "true, it shall be",
+    "friend": "citizen, resident, kind one", "friends": "citizens, residents",
+    "many": "several, all, every", "today": "this day, now", "again": "once more", "snow": "white",
+    "see": "find", "sees": "finds", "know": "hold", "welcome": "come in, enter",
+}
+
+
+def other_forms(tok: Tokenizer, word: str) -> list[str]:
+    """Allowed words that differ from `word` only by an ending: forests -> forest."""
+    w, c = word, []
+    if w.endswith("ies"):
+        c.append(w[:-3] + "y")
+    if w.endswith("es"):
+        c.append(w[:-2])
+    if w.endswith("s"):
+        c.append(w[:-1])
+    if w.endswith("ed"):
+        c += [w[:-2], w[:-1]]
+    if w.endswith("ing"):
+        c += [w[:-3], w[:-3] + "e"]
+    c += [w + "s", w + "es", w + "ed", w + "d"]
+    return [x for x in dict.fromkeys(c) if x in tok.speak_words]
+
+
+def suggestions(tok: Tokenizer, word: str) -> list[str]:
+    """What she could say instead of `word`, all checked against her list."""
+    out = other_forms(tok, word)
+    for alt in (INSTEAD.get(word) or "").split(","):
+        alt = alt.strip()
+        if alt and all(t in tok.speak_words for t in tok.split(alt)):
+            out.append(alt)
+    return list(dict.fromkeys(out))
+
+
+def instead_text(tok: Tokenizer) -> str:
+    """The INSTEAD list for the teacher's standing instructions, checked against her words."""
+    pairs = [(w, suggestions(tok, w)) for w in INSTEAD if w not in tok.speak_words]
+    return "\n".join(f"  {w} -> {', '.join(alts)}" for w, alts in pairs if alts)
+
+
+def describe_bad(tok: Tokenizer, words: list[str]) -> str:
+    """'forests (say forest), stay (say remain or keep near), quiet'"""
+    parts = []
+    for w in words:
+        alts = suggestions(tok, w)
+        parts.append(f"{w} (say {' or '.join(alts[:3])})" if alts else w)
+    return ", ".join(parts)
+
 
 REPAIR_TASK = """That reply uses words she cannot use here: {bad}.
 Rewrite it so it means the same thing using only her allowed words and none of those.
@@ -464,7 +532,7 @@ def write_reply(teacher: Teacher, tok: Tokenizer, system: str, task: str, tries:
             return reply, attempt
         if not reply:
             continue
-        missing = ", ".join(sorted(set(bad) | set(leaned))[:12])
+        missing = describe_bad(tok, sorted(set(bad) | set(leaned))[:12])
         messages = messages[:2] + [
             {"role": "assistant", "content": reply},
             {"role": "user", "content": REPAIR_TASK.format(bad=missing)},
@@ -670,7 +738,7 @@ def main() -> None:
     tok = Tokenizer()
     words = tok.vocab["speak"]
     missing = [w for w in COMMON if w not in tok.speak_words]
-    system = FRAME.format(words=" ".join(words), missing=", ".join(missing))
+    system = FRAME.format(words=" ".join(words), missing=", ".join(missing), instead=instead_text(tok))
     if a.dry_run:
         print(system[:1400] + " ...\n")
         print(f"{len(words):,} allowed words; {len(missing)} everyday words flagged as missing")
