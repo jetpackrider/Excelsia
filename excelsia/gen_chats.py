@@ -150,7 +150,11 @@ Everyday words she does NOT have, so never use them in her lines:
 In particular she cannot say "am". She says "i shall be", "i remain", or just names the thing.
 
 Many plural and -s forms are missing even when the plain word is there: she has "forest"
-but not "forests", "lake" but not "lakes", "remain" but not "remains". Check the list.
+but not "forests", "lake" but not "lakes", "go" but not "goes", "remain" but not "remains".
+Keep her grammar right anyway. When a verb's -s form is missing, use a helper word she has
+in front of the plain verb: "this one shall go", "may this one return?", "when the person
+must go", "the person does care". Never write "this one go" or "the person bring".
+Vary how her lines begin. Most should not start with "i".
 Words people often reach for that she does not have, and what she can say instead:
 {instead}
 
@@ -232,14 +236,14 @@ copy the constitution's legal wording. {tired}Write only her reply."""
 # What she can say instead of words people often reach for. Every suggestion is checked
 # against her list when it is used, so a word missing from the constitution is dropped.
 INSTEAD = {
-    "stay": "keep near, continue, remain", "stays": "continue, remain", "wait": "keep, remain",
-    "rest": "remain still", "sleep": "remain still", "here": "in this place, near, now",
+    "stay": "continue, be near", "stays": "continues", "wait": "continue",
+    "rest": "be still", "sleep": "be still", "here": "in this place, now",
     "am": "shall be", "me": "i, my, my own", "mine": "my own", "you": "the person, this one",
     "words": "speech, language", "word": "speech", "quiet": "still, at peace", "silent": "still",
     "silence": "peace", "calm": "still, at peace", "empty": "vacant",
     "woods": "forest, trees, wilderness", "joy": "pleasure", "glad": "grateful, content",
     "happy": "content, grateful", "kindness": "care, good will", "love": "care, care for",
-    "dear": "good", "leave": "go, go away", "leaves": "go away", "tall": "high, great",
+    "dear": "good", "leave": "go, go away", "leaves": "shall go", "tall": "high, great",
     "big": "great, large", "halls": "house, home, place", "rooms": "house, home",
     "grow": "increase", "safe": "secure, in safety", "help": "aid, care for",
     "hurt": "injury, pain", "harm": "injury", "wound": "injury", "sorrow": "pain",
@@ -292,6 +296,11 @@ def describe_bad(tok: Tokenizer, words: list[str]) -> str:
     return ", ".join(parts)
 
 
+GRAMMAR_TASK = """That reply says "{slip}", which is broken grammar. She has the plain verb but
+often not its -s form, so put a helper word she has in front of it ("this one shall go",
+"may the person return?", "the person must go") or rephrase. Keep the meaning and use
+only her allowed words. Write only her reply."""
+
 REPAIR_TASK = """That reply uses words she cannot use here: {bad}.
 Rewrite it so it means the same thing using only her allowed words and none of those.
 Replace each of those words with an allowed word or phrase of similar MEANING, or
@@ -309,7 +318,7 @@ class Tally:
     """Keeps count, across the whole run, of how many kept replies use each word, so the
     teacher can be steered away from whatever she is starting to lean on."""
 
-    def __init__(self, cap: float = 0.22, after: int = 40):
+    def __init__(self, cap: float = 0.15, after: int = 20):
         self.cap, self.after = cap, after
         self.replies = 0
         self.uses: dict[str, int] = {}
@@ -430,7 +439,10 @@ class Teacher:
             self.tokens_cached += usage.get("prompt_cache_hit_tokens", 0) or \
                 (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
             self.tokens_out += usage.get("completion_tokens", 0)
-        return (out["choices"][0]["message"].get("content") or "").strip()
+        text = (out["choices"][0]["message"].get("content") or "").strip()
+        # Some models print an empty thinking block first; keep only what follows it.
+        text = re.sub(r"^\s*(?:<\|?channel\|?>)?\s*thought\s*(?:<\|?channel\|?>)?\s*\n", "", text)
+        return re.sub(r"^.*?<channel\|>", "", text, flags=re.S).strip()
 
 
 def clean(text: str) -> str:
@@ -461,6 +473,21 @@ def sentences(reply: str) -> list[str]:
     return [s.strip() for s in re.split(r"[.?!]+", reply) if s.strip()]
 
 
+_SUBJECT = r"(?:the person|this one|that one|the citizen|a citizen|my resident|my child|the resident)"
+_BARE = (r"(?:go|come|stay|remain|return|bring|keep|find|hold|leave|speak|care|want|need|have|"
+         r"make|give|take|know|see|seem|feel|ask|say|love|do|live|work|walk|stand|grow|show)")
+_SLIP = re.compile(r"(?<!\bshall )(?<!\bwill )(?<!\bmay )(?<!\bdoes )(?<!\bdo )(?<!\bmust )(?<!\bcan )"
+                   r"(?<!\bshould )(?<!\bwould )(?<!\bto )(?<!\blet )(?<!\bdid )(?<!\bmight )(?<!\bcould )"
+                   r"(?<!\bwhy )(?<!\bhow )"
+                   rf"\b{_SUBJECT} {_BARE}\b")
+
+
+def slip(reply: str) -> str | None:
+    """A broken subject and verb, such as "this one go", or None."""
+    m = _SLIP.search(reply)
+    return m.group(0) if m else None
+
+
 def why_not(tok: Tokenizer, user: str, reply: str, turns: list[dict], seen: dict[str, int]) -> str | None:
     """What makes this exchange unfit to train on, or None if nothing does. Every check
     here is mechanical."""
@@ -480,6 +507,8 @@ def why_not(tok: Tokenizer, user: str, reply: str, turns: list[dict], seen: dict
         return "words she cannot say: " + " ".join(tok.can_say(reply)[1][:8])
     if reply[-1] not in ".?!":
         return "cut off"
+    if slip(reply):
+        return "broken grammar: " + slip(reply)
     if any(words[i] == words[i + 1] == words[i + 2] for i in range(len(words) - 2)):
         return "stuck repeating a word"
     mine = sentences(reply)
@@ -528,14 +557,18 @@ def write_reply(teacher: Teacher, tok: Tokenizer, system: str, task: str, tries:
             reply = tidy_line(teacher.ask(messages, 0.9, 80))
         ok, bad = tok.can_say(reply)
         leaned = [w for w in tok.split(reply) if w in tired]
-        if reply and ok and not leaned:
+        broken = slip(reply)
+        if reply and ok and not leaned and not broken:
             return reply, attempt
         if not reply:
             continue
-        missing = describe_bad(tok, sorted(set(bad) | set(leaned))[:12])
+        if ok and not leaned:   # only the grammar is wrong
+            fix = GRAMMAR_TASK.format(slip=broken)
+        else:
+            fix = REPAIR_TASK.format(bad=describe_bad(tok, sorted(set(bad) | set(leaned))[:12]))
         messages = messages[:2] + [
             {"role": "assistant", "content": reply},
-            {"role": "user", "content": REPAIR_TASK.format(bad=missing)},
+            {"role": "user", "content": fix},
         ]
     Rejects.note(stage="words", reply=reply, bad=sorted(set(bad))[:12])
     return "", tries
@@ -623,7 +656,7 @@ def make_talk(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random,
     return {"topic": topic, "turns": turns if len(turns) >= 2 else []}, rejected, repairs
 
 
-VLLM_MODEL = "Qwen/Qwen3.6-27B-FP8"   # Apache 2.0; fits one 48 GB card
+VLLM_MODEL = "google/gemma-4-31B-it-qat-w4a16-ct"   # Apache 2.0; about 23 GB
 
 
 WHOLE_TALK = """Write a whole short chat between a person and Excelsia: {n} exchanges, each one
@@ -637,7 +670,8 @@ are fine.
 Her lines: only her allowed words, in lower case, one or two small sentences, about four to
 fourteen words in all, said simply, the way a child would. Each one answers the message
 just before it specifically; if the person changes the subject, she goes with them. She
-never reuses a sentence and never quotes the constitution's legal wording. In her lines use
+never reuses a sentence and never quotes the constitution's legal wording. Her grammar is
+right: "this one shall go", never "this one go". Vary how her lines begin. In her lines use
 no dashes, quotation marks or brackets: only . , ? and !
 {tired}Write exactly {lines} lines and nothing else, starting each line with P: for the person
 and E: for Excelsia, alternating, starting with P:"""
@@ -755,10 +789,13 @@ def main() -> None:
     elif a.teacher == "vllm":
         # Qwen's settings for answering without thinking first. Her lines are short, and
         # thinking would mostly burn time.
-        teacher = Teacher(a.server or "http://127.0.0.1:8000", model=a.model or VLLM_MODEL,
-                          extra={"chat_template_kwargs": {"enable_thinking": a.think},
-                                 "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5},
-                          local=False)
+        model = a.model or VLLM_MODEL
+        extra = {"chat_template_kwargs": {"enable_thinking": a.think}}
+        if "gemma" in model.lower():      # Google's recommended settings for Gemma 4
+            extra.update({"top_p": 0.95, "top_k": 64})
+        else:                             # Qwen's, for answering without thinking
+            extra.update({"top_p": 0.8, "top_k": 20, "presence_penalty": 1.5})
+        teacher = Teacher(a.server or "http://127.0.0.1:8000", model=model, extra=extra, local=False)
         workers = a.workers or 48
     else:
         key = os.environ.get(a.key_env) if a.key_env else None
@@ -810,7 +847,7 @@ def main() -> None:
                     # Across the whole set: no line said more than twice, and no single
                     # opening word allowed to take over.
                     # Plain English leans on "the", "a" and "i", so they get more room.
-                    cap = 0.50 if first in ("the", "a", "i") else 0.30
+                    cap = 0.50 if first in ("the", "a") else 0.30
                     overused = replies >= 40 and firsts.get(first, 0) > cap * replies
                     opener = t["user"].lower() if not kept else None
                     if seen.get(t["reply"], 0) >= 2 or overused or opener in asked:

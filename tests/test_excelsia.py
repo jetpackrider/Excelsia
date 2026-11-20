@@ -435,11 +435,24 @@ def test_a_whole_conversation_is_checked_line_by_line():
 def test_a_repair_names_the_words_she_can_use_instead():
     from excelsia.gen_chats import describe_bad, instead_text
     hint = describe_bad(tok, ["forests", "stay", "zzz"])
-    assert "forests (say forest)" in hint and "stay (say keep near" in hint and hint.endswith("zzz")
+    assert "forests (say forest)" in hint and "stay (say continue" in hint and hint.endswith("zzz")
     for line in instead_text(tok).splitlines():           # every suggestion is hers to say
         word, alts = line.strip().split(" -> ")
         assert word not in tok.speak_words
         assert all(tok.can_say(a)[0] for a in alts.split(", "))
+
+
+def test_broken_grammar_is_caught_and_sent_back():
+    from excelsia.gen_chats import slip
+    assert slip("this one go away. i remain alone.") == "this one go"
+    assert slip("the person care for my waters.") == "the person care"
+    for fine in ["shall this one return?", "when the person must go.", "does this one care?",
+                 "i hold this one near."]:
+        assert slip(fine) is None, fine
+    teacher = FakeTeacher(["this one go away.", "this one shall go away."])
+    reply, tries = write_reply(teacher, tok, "system", "task", tries=3)
+    assert (reply, tries) == ("this one shall go away.", 2)
+    assert "broken grammar" in teacher.asked[1][-1]["content"]
 
 
 if __name__ == "__main__":

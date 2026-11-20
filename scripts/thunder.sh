@@ -4,15 +4,15 @@
 #
 #   bash scripts/thunder.sh setup       # once: install vLLM, download the teacher and her reading
 #   bash scripts/thunder.sh pilot       # the teacher writes 50 conversations, to read before going big
-#   bash scripts/thunder.sh chats N     # the teacher writes N conversations into data/chats-qwen.jsonl
+#   bash scripts/thunder.sh chats N     # the teacher writes N conversations into data/chats-teacher.jsonl
 #   bash scripts/thunder.sh stop        # stop the teacher and free the card
 #
 # Start long stages in the background so a dropped connection does not stop them:
 #   nohup bash scripts/thunder.sh pilot > ~/pilot.log 2>&1 &
 #
-# The teacher is Qwen3.6-27B (Apache 2.0) in Qwen's own FP8 version, served by vLLM on the
-# server's own card: about 250-400 conversations an hour on an RTX A6000. The lighter
-# Qwen/Qwen3.6-35B-A3B-FP8 (set EXCELSIA_TEACHER) is faster but wrote her flat and legal. Each conversation
+# The teacher is Gemma 4 31B (Apache 2.0) in Google's own 4-bit version (about 23 GB),
+# served by vLLM on the server's own card. It rates among the best open models for creative
+# writing. Set EXCELSIA_TEACHER=Qwen/Qwen3.6-27B-FP8 to use Qwen instead. Each conversation
 # is written in one request, and only her lines that fail the word check go back for
 # repair. Every thrown-away exchange is logged, with the reason, in work/rejects.jsonl.
 # No hosted AI service is called.
@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ENV="${EXCELSIA_ENV:-$HOME/env}"
-MODEL="${EXCELSIA_TEACHER:-Qwen/Qwen3.6-27B-FP8}"
+MODEL="${EXCELSIA_TEACHER:-google/gemma-4-31B-it-qat-w4a16-ct}"
 PORT=8000
 LOGS="${EXCELSIA_LOGS:-$HOME}"
 
@@ -47,8 +47,12 @@ serve() {
     sleep 5   # let the card's memory free up
   fi
   echo "== starting the teacher ($MODEL); its log is $LOGS/vllm.log"
+  local extra=()
+  case "$MODEL" in
+    *gemma-4*) extra=(--reasoning-parser gemma4) ;;   # keeps its empty thinking block out of replies
+  esac
   nohup vllm serve "$MODEL" --port "$PORT" --language-model-only --max-model-len 16384 \
-    --gpu-memory-utilization 0.92 --max-num-seqs 64 > "$LOGS/vllm.log" 2>&1 &
+    --gpu-memory-utilization 0.92 --max-num-seqs 64 ${extra[@]+"${extra[@]}"} > "$LOGS/vllm.log" 2>&1 &
   local pid=$!
   for _ in $(seq 1 240); do
     if up; then echo "the teacher is up"; return; fi
@@ -82,8 +86,8 @@ write_chats() {  # write_chats <how many> <file>
 stage="${1:-help}"; shift || true
 case "$stage" in
   setup) setup ;;
-  pilot) need_gpu; rm -f work/pilot-qwen.jsonl work/rejects.jsonl; mkdir -p work; write_chats 50 work/pilot-qwen.jsonl ;;
-  chats) write_chats "${1:-1000}" data/chats-qwen.jsonl ;;
+  pilot) need_gpu; rm -f work/pilot.jsonl work/rejects.jsonl; mkdir -p work; write_chats 50 work/pilot.jsonl ;;
+  chats) write_chats "${1:-1000}" data/chats-teacher.jsonl ;;
   serve) need_gpu; activate; serve ;;
   stop)  pkill -f "vllm serve" && echo "the teacher is stopped" || echo "the teacher was not running" ;;
   *)     sed -n '2,15p' "$0" ;;
