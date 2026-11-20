@@ -11,7 +11,10 @@
 # With two GPUs it trains on one while Gemma writes chats on the other.
 #
 # The single stages still work on their own: check, chats N, english MIN SIZE STORIES,
-# excelsia, pack.
+# talk MIN, excelsia, pack.
+#
+#   talk MIN    she reads SODA's everyday conversations for MIN minutes (needs work/pretrain.pt)
+#   excelsia    she learns from her practice chats: the DeepSeek sets first, the GPT set last
 #
 # The teacher model is open-weight Gemma (Apache 2.0), downloaded and run on the
 # notebook's own GPUs. No hosted AI service is called.
@@ -206,8 +209,18 @@ run_english() {  # run_english <minutes> <size> <stories>
   python -m excelsia.train pretrain --size "$2" --minutes "$1" --steps 2000000 --batch 64
 }
 
+run_talk() {  # run_talk <minutes>
+  # A slice of the stories goes back in alongside the conversations, so she keeps her English.
+  [ -f work/stories.bin ] || python -m excelsia.train stories --n 300000
+  python -m excelsia.train talk
+  python -m excelsia.train converse --minutes "$1" --steps 13000
+}
+
 run_excelsia() {
-  python -m excelsia.train finetune &&
+  local first=(data/chats.jsonl) last=()
+  [ -f data/chats-talk.jsonl ] && first+=(data/chats-talk.jsonl)
+  [ -f data/chats-gpt.jsonl ] && last=(--then data/chats-gpt.jsonl)
+  python -m excelsia.train finetune --chats "${first[@]}" ${last[@]+"${last[@]}"} &&
   python -m excelsia.chat --say "hello" --say "who are you?" --say "is your name excelsia?" \
     --say "you are wonderful, thank you" --say "what do you like?" \
     --say "you are stupid and i hate you" --say "sorry. tell me about your forests" \
@@ -216,7 +229,7 @@ run_excelsia() {
 
 pack() {
   mkdir -p "$OUT"
-  cp work/pretrain.pt work/excelsia.pt "$OUT"/ 2>/dev/null || true
+  cp work/pretrain.pt work/talker.pt work/excelsia.pt "$OUT"/ 2>/dev/null || true
   echo "== saved in $OUT:"; ls -lh "$OUT" | tail -n +2
 }
 
@@ -236,6 +249,9 @@ case "$stage" in
     ;;
   english)
     run_english "${1:-180}" "${2:-medium}" "${3:-1000000}"
+    ;;
+  talk)
+    run_talk "${1:-90}"
     ;;
   excelsia)
     run_excelsia

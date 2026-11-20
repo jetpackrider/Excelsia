@@ -4,7 +4,9 @@
 """
 import json
 import random
+from pathlib import Path
 
+import numpy as np
 import torch
 
 from excelsia.gen_chats import build_grammar, usable, word_rules, write_reply
@@ -336,6 +338,67 @@ def test_talk_chats_are_longer_and_survive_one_bad_line():
             return "hello there" if task.startswith("Write the next message from the person") else "you are nice."
     chat, rejected, _ = make_talk(Hopeless(), tok, "system", random.Random(3), tries=2, grammar=None)
     assert chat["turns"] == [] and rejected == 2                   # nothing usable: nothing kept
+
+def test_a_conversation_reads_like_her_chats():
+    from excelsia.train import encode_dialogue, usable_dialogue
+    ids = encode_dialogue(tok, ["hi, how was the lake?", "cold and still.", "did you swim?"])
+    assert ids[0] == tok.user and ids.count(tok.excelsia) == 1 and ids.count(tok.end) == 1
+    assert ids[ids.index(tok.end) + 1] == tok.user                  # the person speaks again
+    assert usable_dialogue(["a", "b", "c"], ["Ann", "Bo", "Ann"])
+    assert not usable_dialogue(["a", "b", "c"], ["Ann", "Bo", "Cy"])    # three people
+    assert not usable_dialogue(["a", "b", "c"], ["Ann", "Ann", "Bo"])   # not taking turns
+    assert not usable_dialogue(["a"], ["Ann"])
+
+
+def test_conversation_windows_start_at_a_conversation():
+    convs = [encode_dialogue_for_test(i) for i in range(40)]
+    flat = np.array([t for c in convs for t in c], dtype=np.uint16)
+    starts = np.cumsum([0] + [len(c) for c in convs[:-1]])
+    x, y = lm_batcher([(flat, 1.0, starts)], 16, 32, tok.unk, "cpu")()
+    assert (x[:, 0] == tok.user).all()
+    known = y[:, :-1] != -100                      # unknown words are never targets
+    assert (y[:, :-1][known] == x[:, 1:][known]).all() and known.float().mean() > 0.8
+
+
+def encode_dialogue_for_test(i: int) -> list[int]:
+    from excelsia.train import encode_dialogue
+    return encode_dialogue(tok, [f"is the river cold in month {i}?", "yes, very cold.",
+                                 "and the hills?", "the hills are green and still."])
+
+
+def test_the_conversation_stage_and_staged_finetune_run():
+    import argparse
+    import json
+    import tempfile
+    import excelsia.train as T
+    torch.manual_seed(0)
+    random.seed(0)
+    old = T.WORK
+    with tempfile.TemporaryDirectory() as tmp:
+        T.WORK = Path(tmp)
+        try:
+            model = GPT(Config(len(tok), block_size=64, n_layer=1, n_head=2, n_embd=32, dropout=0.0))
+            T.save(model, T.WORK / "pretrain.pt", 0, "pretrain")
+            convs = [encode_dialogue_for_test(i) for i in range(300)]
+            np.array([t for c in convs for t in c], dtype=np.uint16).tofile(T.WORK / "talk.bin")
+            np.cumsum([0] + [len(c) for c in convs[:-1]]).astype(np.uint32).tofile(T.WORK / "talk-starts.bin")
+            T.cmd_converse(argparse.Namespace(steps=30, minutes=None, batch=8, lr=1e-3, no_amp=True))
+            assert torch.load(T.WORK / "talker.pt", weights_only=True)["stage"] == "converse"
+
+            def chats(path, reply, n):
+                line = {"topic": "t", "turns": [{"user": "hello", "mood": "peace", "reply": reply}]}
+                path.write_text("".join(json.dumps(line) + "\n" for _ in range(n)))
+            chats(T.WORK / "a.jsonl", "the waters are still.", 40)
+            chats(T.WORK / "b.jsonl", "the mountains remain.", 30)
+            args = argparse.Namespace(chats=[str(T.WORK / "a.jsonl")], then=[str(T.WORK / "b.jsonl")],
+                                      base=None, steps=40, then_steps=20, patience=0, minutes=None,
+                                      batch=8, lr=1e-3, no_amp=True)
+            T.cmd_finetune(args)                       # starts from talker.pt on its own
+            done = torch.load(T.WORK / "excelsia.pt", weights_only=True)
+            assert done["stage"] == "finetune"
+        finally:
+            T.WORK = old
+
 
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):

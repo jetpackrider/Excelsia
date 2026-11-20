@@ -84,10 +84,25 @@ python -m excelsia.gen_chats --n 300 --teacher deepseek
 Read `data/chats.jsonl` before going further. If the chats are bad, the model
 will be too.
 
-**3. Teach her to be Excelsia.**
+**3. Let her read ordinary conversations.** Before her own practice chats she
+reads SODA, about 1.2 million everyday two-person conversations, in the same shape
+as her chats: the first speaker is the person, the second answers where she would.
+She reads them but never says them, since the speaking mask still holds. The point
+is to learn that a reply answers what was just said. This step is optional, and
+best done on a GPU (about an hour on Kaggle).
 
 ```bash
-python -m excelsia.train finetune
+python -m excelsia.train talk         # download and tokenize SODA (690 MB, once)
+python -m excelsia.train converse     # work/pretrain.pt -> work/talker.pt
+```
+
+**4. Teach her to be Excelsia.** She starts from `talker.pt` if it exists, else
+from `pretrain.pt`. Give the chats she should sound most like with `--then`: she
+studies the first set, then the `--then` set last.
+
+```bash
+python -m excelsia.train finetune --chats data/chats.jsonl data/chats-talk.jsonl \
+    --then data/chats-gpt.jsonl
 python -m excelsia.chat
 ```
 
@@ -166,9 +181,16 @@ by everyone. Her replies begin with her mood in brackets. Moderators can use
 
 - The New York State Constitution (public law).
 - [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), a public dataset.
-- The practice chats in `data/chats.jsonl`, written by DeepSeek's hosted API
-  (the `deepseek-flash` model) in November 2026 with `--teacher deepseek`.
-- The practice chats in `data/chats-gpt.jsonl`, written by an OpenAI model in
+- [SODA](https://huggingface.co/datasets/allenai/soda) by Hyunwoo Kim and others
+  ([paper](https://arxiv.org/abs/2212.10465)), licensed
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Its conversations were
+  written by an OpenAI model for that project. She reads its training split in step 3,
+  reformatted into her chat shape; conversations that are not two people taking
+  turns are left out. It is downloaded at training time, not stored here.
+- The practice chats in `data/chats.jsonl` and `data/chats-talk.jsonl`, written by
+  DeepSeek's hosted API (the `deepseek-flash` model) in November 2026 with
+  `--teacher deepseek`, the second set with `--talk`.
+- The practice chats in `data/chats-gpt.jsonl`, written by GPT-6.2 Astra in
   ChatGPT in November 2026 from a prompt asking for longer conversations with
   follow-ups and changes of subject. They were then checked line by line with
   `python -m excelsia.check_chats`.
@@ -205,7 +227,7 @@ from any word that starts turning up too often.
 excelsia/words.py       constitution text -> word list
 excelsia/tokenizer.py   vocabulary and the speaking mask
 excelsia/model.py       a small GPT
-excelsia/train.py       stories / pretrain / finetune
+excelsia/train.py       stories / pretrain / talk / converse / finetune
 excelsia/gen_chats.py   practice chats written by a teacher model
 excelsia/check_chats.py check chats written elsewhere before she trains on them
 excelsia/chat.py        talk to her; mood tracker
