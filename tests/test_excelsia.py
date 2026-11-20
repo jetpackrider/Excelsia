@@ -400,6 +400,38 @@ def test_the_conversation_stage_and_staged_finetune_run():
             T.WORK = old
 
 
+def test_her_lines_are_tidied_before_the_word_check():
+    from excelsia.gen_chats import tidy_line
+    assert tidy_line("I remain \u2014 always here!") == "i remain, always here!"
+    assert tidy_line('"my waters are cold" \U0001F60A') == "my waters are cold."
+    assert tidy_line("Excelsia: the hudson (my river) is wide") == "the hudson my river is wide."
+    assert tidy_line("i remain, ") == "i remain."
+    assert tok.can_say(tidy_line("my waters \u2014 all of them \u2014 are still"))[0]
+
+
+def test_a_whole_conversation_is_checked_line_by_line():
+    from excelsia.gen_chats import make_whole, parse_whole
+    assert parse_whole("P: hi\nE: i remain.\n**P:** what?\n**E:** my waters are still.\nP: bye") == [
+        ("hi", "i remain."), ("what?", "my waters are still.")]
+
+    class Whole:
+        def __init__(self):
+            self.calls = 0
+        def ask(self, messages, temperature, max_tokens, grammar=None):
+            self.calls += 1
+            if self.calls == 1:   # the whole draft: her second line needs a repair
+                return ("P: hey there\nE: my waters are still \u2014 come near.\n"
+                        "P: why are they still?\nE: they are happy today.\n"
+                        "P: ok, and your mountains?\nE: my mountains are high and old.")
+            return "they are at peace."
+    teacher = Whole()
+    chat, rejected, repairs = make_whole(teacher, tok, "system", random.Random(1), tries=3, grammar=None)
+    replies = [t["reply"] for t in chat["turns"]]
+    assert replies == ["my waters are still, come near.", "they are at peace.", "my mountains are high and old."]
+    assert repairs == 1 and rejected == 0 and all(tok.can_say(r)[0] for r in replies)
+    assert teacher.calls == 2                       # one draft and one repair, not a call per line
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

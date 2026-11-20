@@ -372,43 +372,92 @@ def clean(text: str) -> str:
     return text.strip().strip('"“”').strip()
 
 
+def tidy_line(text: str) -> str:
+    """Her line, in lower case, with the punctuation she cannot use mended: dashes become
+    commas, quotation marks, brackets and emoji go, and a missing full stop is added.
+    These are things a model does out of habit, and fixing them changes no meaning."""
+    text = clean(text).lower()
+    text = re.sub(r"\s*[\u2014\u2013]\s*|\s+-+\s+|--+", ", ", text)
+    text = re.sub(r"[\"\u201c\u201d()\[\]{}*_]", "", text)
+    text = re.sub(r"[^a-z0-9 ,.?!;:'\u2018\u2019]", "", text)
+    text = re.sub(r"\s+([,.?!;:])", r"\1", text)
+    text = re.sub(r"[,;:]+\s*$", ".", text.strip())
+    text = re.sub(r",\s*([.?!])", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    if text and text[-1] not in ".?!":
+        text += "."
+    return text
+
+
 def sentences(reply: str) -> list[str]:
     return [s.strip() for s in re.split(r"[.?!]+", reply) if s.strip()]
 
 
-def usable(tok: Tokenizer, user: str, reply: str, turns: list[dict], seen: dict[str, int]) -> bool:
-    """Is this exchange fit to train on? Every check here is mechanical."""
+def why_not(tok: Tokenizer, user: str, reply: str, turns: list[dict], seen: dict[str, int]) -> str | None:
+    """What makes this exchange unfit to train on, or None if nothing does. Every check
+    here is mechanical."""
     said = [t["reply"] for t in turns]
     words = tok.split(reply)
-    if not user or len(user) > 300 or not words:
-        return False
-    if said and user.lower() == said[-1].lower():  # the teacher parroted her last line
-        return False
-    if tok.split(user) == words:  # her reply just echoes what the person said
-        return False
-    if any(user.lower() == t["user"].lower() for t in turns):  # the person repeated themselves
-        return False
-    if not tok.can_say(reply)[0] or reply[-1] not in ".?!":  # forbidden word, or cut off
-        return False
+    if not user or len(user) > 300:
+        return "no message from the person, or a very long one"
+    if not words:
+        return "no reply"
+    if said and user.lower() == said[-1].lower():
+        return "the person parroted her last line"
+    if tok.split(user) == words:
+        return "her reply echoes the person"
+    if any(user.lower() == t["user"].lower() for t in turns):
+        return "the person repeated themselves"
+    if not tok.can_say(reply)[0]:
+        return "words she cannot say: " + " ".join(tok.can_say(reply)[1][:8])
+    if reply[-1] not in ".?!":
+        return "cut off"
     if any(words[i] == words[i + 1] == words[i + 2] for i in range(len(words) - 2)):
-        return False  # stuck repeating a word
+        return "stuck repeating a word"
     mine = sentences(reply)
-    if len(set(mine)) < len(mine):  # says the same sentence twice
-        return False
+    if len(set(mine)) < len(mine):
+        return "says the same sentence twice"
     earlier = {s for r in said for s in sentences(r)}
-    if any(s in earlier for s in mine):  # reuses a sentence from earlier in this chat
-        return False
-    return reply not in said and seen.get(reply, 0) < 2
+    if any(s in earlier for s in mine):
+        return "reuses a sentence from earlier in the chat"
+    if reply in said or seen.get(reply, 0) >= 2:
+        return "a reply already used"
+    return None
+
+
+def usable(tok: Tokenizer, user: str, reply: str, turns: list[dict], seen: dict[str, int]) -> bool:
+    """Is this exchange fit to train on?"""
+    return why_not(tok, user, reply, turns, seen) is None
+
+
+class Rejects:
+    """Optional log of every exchange that was thrown away, and why. Off unless a path is set."""
+    path: Path | None = None
+    lock = threading.Lock()
+
+    @classmethod
+    def note(cls, **row) -> None:
+        if cls.path is None:
+            return
+        with cls.lock, cls.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def write_reply(teacher: Teacher, tok: Tokenizer, system: str, task: str, tries: int,
-                grammar: str | None = None, tired: tuple[str, ...] = ()) -> tuple[str, int]:
-    """Write, check, repair. Returns (reply, tries used); reply is "" if it never passed."""
+                grammar: str | None = None, tired: tuple[str, ...] = (),
+                first: str | None = None) -> tuple[str, int]:
+    """Write, check, repair. Returns (reply, tries used); reply is "" if it never passed.
+    `first` is a draft already written (as part of a whole conversation); it counts as
+    the first try."""
     messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
     if grammar:  # the older letter-by-letter method: one pass, always legal
         return clean(teacher.ask(messages, 0.9, 60, grammar)).lower(), 1
+    reply, bad = "", []
     for attempt in range(1, tries + 1):
-        reply = clean(teacher.ask(messages, 0.9, 80)).lower()
+        if attempt == 1 and first is not None:
+            reply = tidy_line(first)
+        else:
+            reply = tidy_line(teacher.ask(messages, 0.9, 80))
         ok, bad = tok.can_say(reply)
         leaned = [w for w in tok.split(reply) if w in tired]
         if reply and ok and not leaned:
@@ -420,6 +469,7 @@ def write_reply(teacher: Teacher, tok: Tokenizer, system: str, task: str, tries:
             {"role": "assistant", "content": reply},
             {"role": "user", "content": REPAIR_TASK.format(bad=missing)},
         ]
+    Rejects.note(stage="words", reply=reply, bad=sorted(set(bad))[:12])
     return "", tries
 
 
@@ -492,10 +542,13 @@ def make_talk(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random,
                 so_far=transcript(turns, user), feeling=feeling,
                 tired=TIRED.format(words=", ".join(tired)) if tired else ""), tries, grammar, tired)
             repairs += used - 1
-            if usable(tok, user, reply, turns, {}):
+            why = why_not(tok, user, reply, turns, {}) if reply else "never passed the word check"
+            if why is None:
                 turns.append({"user": user, "mood": mood, "reply": reply})
                 added = True
                 break
+            if reply:
+                Rejects.note(stage="check", user=user, reply=reply, why=why)
             rejected += 1
         if not added:
             break
@@ -505,12 +558,98 @@ def make_talk(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random,
 VLLM_MODEL = "Qwen/Qwen3.6-27B-FP8"   # Apache 2.0; fits one 48 GB card
 
 
+WHOLE_TALK = """Write a whole short chat between a person and Excelsia: {n} exchanges, each one
+message from the person followed by her reply.
+Who is typing: {voice}. Do not have them say who they are; it only shapes how they write.
+How it goes, exchange by exchange:
+{plan}
+The person's lines: one short, casual line each, the way someone types in a chat, under 120
+characters, spoken to her ("you"), never about her. Slang, lower case and loose punctuation
+are fine.
+Her lines: only her allowed words, in lower case, one or two small sentences, about four to
+fourteen words in all, said simply, the way a child would. Each one answers the message
+just before it specifically; if the person changes the subject, she goes with them. She
+never reuses a sentence and never quotes the constitution's legal wording. In her lines use
+no dashes, quotation marks or brackets: only . , ? and !
+{tired}Write exactly {lines} lines and nothing else, starting each line with P: for the person
+and E: for Excelsia, alternating, starting with P:"""
+
+_LINE = re.compile(r"^\s*\**\s*(p|person|e|excelsia)\s*\**\s*[:\uff1a]\s*(.*)$", re.I)
+
+
+def parse_whole(text: str) -> list[tuple[str, str]]:
+    """'P: ...' / 'E: ...' lines into (person, her) pairs, in order, stopping at the first
+    break in the pattern."""
+    pairs, pending = [], None
+    for raw in text.splitlines():
+        m = _LINE.match(raw)
+        if not m:
+            continue
+        who, line = m.group(1).lower()[0], m.group(2).strip().lstrip("*").strip()
+        if who == "p":
+            pending = line
+        elif pending is not None:
+            pairs.append((pending, line))
+            pending = None
+        else:
+            break
+    return pairs
+
+
+def make_whole(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random, tries: int,
+               grammar: str | None, tally: Tally | None = None) -> tuple[dict, int, int]:
+    """Like make_talk, but the teacher writes the whole conversation in one request. Only
+    her lines that fail the word check go back for repair, one at a time, with the
+    conversation so far. The chat is cut at the first exchange that cannot be saved, and
+    kept if at least two survive. Returns (chat, exchanges rejected, repairs)."""
+    topic, voice = rng.choice(TOPICS), rng.choice(VOICES)
+    mood, plan, moods = rng.choice(MOODS), [], []
+    n = rng.choices([3, 4, 5], [4, 4, 2])[0]
+    for i in range(n):
+        if i == 0:
+            what = f"The person is {topic}."
+        else:
+            kinds = ["follow"] * 3 + ["switch"] * 3 + ["react"] * 2 + ["answer"] * 2 + (["back"] if i > 1 else [])
+            kind = rng.choice(kinds)
+            if kind == "switch" or rng.random() < 0.4:
+                mood = rng.choice(MOODS)
+            what = "The person should " + MOVES[kind].format(topic=rng.choice(TOPICS)) + "."
+        feeling, manner = FEELINGS[mood]
+        plan.append(f"{i + 1}. {what} Their manner: {manner}. She feels {feeling}.")
+        moods.append(mood)
+    tired = tuple(tally.tired) if tally else ()
+    draft = teacher.ask([{"role": "system", "content": system}, {"role": "user", "content": WHOLE_TALK.format(
+        n=n, voice=voice, plan="\n".join(plan), lines=2 * n,
+        tired=TIRED.format(words=", ".join(tired)) if tired else "")}], 0.9, 90 * n)
+    turns: list[dict] = []
+    rejected = repairs = 0
+    for (user, line), mood in zip(parse_whole(draft), moods):
+        user = clean(user)
+        feeling = FEELINGS[mood][0]
+        reply, used = write_reply(teacher, tok, system, EXCELSIA_TALK.format(
+            so_far=transcript(turns, user), feeling=feeling,
+            tired=TIRED.format(words=", ".join(tired)) if tired else ""),
+            tries, None, tired, first=line)
+        repairs += used - 1
+        why = why_not(tok, user, reply, turns, {}) if reply else "never passed the word check"
+        if why is not None:
+            if reply:
+                Rejects.note(stage="check", user=user, reply=reply, why=why)
+            rejected += 1
+            break
+        turns.append({"user": user, "mood": mood, "reply": reply})
+    return {"topic": topic, "turns": turns if len(turns) >= 2 else []}, rejected, repairs
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="python -m excelsia.gen_chats")
     p.add_argument("--n", type=int, default=300, help="how many chats to add")
     p.add_argument("--out", help="file to add to (default data/chats.jsonl, or data/chats-talk.jsonl with --talk)")
     p.add_argument("--talk", action="store_true",
                    help="write longer chats built to teach conversation: follow-ups, changes of subject")
+    p.add_argument("--whole", action="store_true",
+                   help="with --talk: the teacher writes each conversation in one request (much faster)")
+    p.add_argument("--rejects", help="write every thrown-away exchange, and why, to this file")
     p.add_argument("--teacher", choices=["local", "deepseek", "vllm"], default="local",
                    help="local: llama.cpp on this machine; deepseek: DeepSeek's API; "
                         "vllm: an open model served by vLLM on a GPU server (see scripts/thunder.sh)")
@@ -561,7 +700,10 @@ def main() -> None:
     grammar = build_grammar(words) if a.grammar else None
 
     out, rng = Path(a.out or DATA / ("chats-talk.jsonl" if a.talk else "chats.jsonl")), random.Random(a.seed)
-    write_one = make_talk if a.talk else make_chat
+    write_one = (make_whole if a.whole else make_talk) if a.talk else make_chat
+    if a.rejects:
+        Rejects.path = Path(a.rejects)
+        Rejects.path.parent.mkdir(parents=True, exist_ok=True)
     if a.replace and out.exists() and not a.dry_run:
         keep = WORK / f"{out.stem}-old-{int(time.time())}{out.suffix}"
         WORK.mkdir(exist_ok=True)

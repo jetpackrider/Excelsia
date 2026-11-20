@@ -10,13 +10,17 @@
 # Start long stages in the background so a dropped connection does not stop them:
 #   nohup bash scripts/thunder.sh pilot > ~/pilot.log 2>&1 &
 #
-# The teacher is Qwen3.6-27B (Apache 2.0) in Qwen's own FP8 version, served by vLLM on the
-# server's own card. No hosted AI service is called.
+# The teacher is Qwen3.6-35B-A3B (Apache 2.0) in Qwen's own FP8 version, served by vLLM on
+# the server's own card. It uses about 3B of its 35B numbers per word, so it writes fast.
+# Set EXCELSIA_TEACHER=Qwen/Qwen3.6-27B-FP8 for the slower, denser one. Each conversation
+# is written in one request, and only her lines that fail the word check go back for
+# repair. Every thrown-away exchange is logged, with the reason, in work/rejects.jsonl.
+# No hosted AI service is called.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ENV="${EXCELSIA_ENV:-$HOME/env}"
-MODEL="${EXCELSIA_TEACHER:-Qwen/Qwen3.6-27B-FP8}"
+MODEL="${EXCELSIA_TEACHER:-Qwen/Qwen3.6-35B-A3B-FP8}"
 PORT=8000
 LOGS="${EXCELSIA_LOGS:-$HOME}"
 
@@ -32,8 +36,16 @@ activate() {
 
 up() { curl -sf -m 2 "http://127.0.0.1:$PORT/v1/models" > /dev/null; }
 
+serving() { curl -sf -m 2 "http://127.0.0.1:$PORT/v1/models" | python -c "import json,sys; print(json.load(sys.stdin)['data'][0]['id'])"; }
+
 serve() {
-  if up; then echo "the teacher is already running"; return; fi
+  if up; then
+    if [ "$(serving)" = "$MODEL" ]; then echo "the teacher is already running"; return; fi
+    echo "== another teacher is running; stopping it"
+    pkill -f "vllm serve" || true
+    while up; do sleep 2; done
+    sleep 5   # let the card's memory free up
+  fi
   echo "== starting the teacher ($MODEL); its log is $LOGS/vllm.log"
   nohup vllm serve "$MODEL" --port "$PORT" --language-model-only --max-model-len 16384 \
     --gpu-memory-utilization 0.92 --max-num-seqs 64 > "$LOGS/vllm.log" 2>&1 &
@@ -62,14 +74,15 @@ setup() {
 
 write_chats() {  # write_chats <how many> <file>
   need_gpu; activate; serve
-  python -m excelsia.gen_chats --teacher vllm --talk --n "$1" --out "$2"
+  python -m excelsia.gen_chats --teacher vllm --model "$MODEL" --talk --whole --n "$1" --out "$2" \
+    --rejects work/rejects.jsonl
   echo; python -m excelsia.check_chats "$2"
 }
 
 stage="${1:-help}"; shift || true
 case "$stage" in
   setup) setup ;;
-  pilot) need_gpu; rm -f work/pilot-qwen.jsonl; mkdir -p work; write_chats 50 work/pilot-qwen.jsonl ;;
+  pilot) need_gpu; rm -f work/pilot-qwen.jsonl work/rejects.jsonl; mkdir -p work; write_chats 50 work/pilot-qwen.jsonl ;;
   chats) write_chats "${1:-1000}" data/chats-qwen.jsonl ;;
   serve) need_gpu; activate; serve ;;
   stop)  pkill -f "vllm serve" && echo "the teacher is stopped" || echo "the teacher was not running" ;;

@@ -125,9 +125,10 @@ one at a time as they are written.
 
 ## Running the teacher on a rented GPU
 
-`scripts/thunder.sh` runs an open teacher, Qwen3.6-27B (Apache 2.0), on a rented
+`scripts/thunder.sh` runs an open teacher, Qwen3.6-35B-A3B (Apache 2.0), on a rented
 server with one 48 GB card (written for Thunder Compute, works on any such Linux
-machine). It writes practice conversations for free, as fast as the card allows.
+machine). It writes each practice conversation in one request, sends only her lines
+that fail the word check back for repair, and logs every rejected line with the reason.
 
 ```bash
 bash scripts/thunder.sh setup                                   # once
@@ -202,7 +203,7 @@ by everyone. Her replies begin with her mood in brackets. Moderators can use
 - The practice chats in `data/chats.jsonl` and `data/chats-talk.jsonl`, written by
   DeepSeek's hosted API (the `deepseek-flash` model) in November 2026 with
   `--teacher deepseek`, the second set with `--talk`.
-- Any practice chats in `data/chats-qwen.jsonl`, written by Qwen3.6-27B (Apache 2.0)
+- Any practice chats in `data/chats-qwen.jsonl`, written by Qwen3.6 (Apache 2.0)
   running on a rented GPU with `scripts/thunder.sh`.
 - The practice chats in `data/chats-gpt.jsonl`, written by GPT-6.2 Astra in
   ChatGPT in November 2026 from a prompt asking for longer conversations with
