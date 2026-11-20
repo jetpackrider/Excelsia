@@ -43,6 +43,7 @@ import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
+from .mood import KIND, UNKIND
 from .tokenizer import DATA, MOODS, Tokenizer
 
 WORK = DATA.parent / "work"
@@ -301,6 +302,9 @@ often not its -s form, so put a helper word she has in front of it ("this one sh
 "may the person return?", "the person must go") or rephrase. Keep the meaning and use
 only her allowed words. Write only her reply."""
 
+STATEMENT_TASK = """Her last line was already a question, so make this one a statement, not a
+question. Keep the meaning and use only her allowed words. Write only her reply."""
+
 REPAIR_TASK = """That reply uses words she cannot use here: {bad}.
 Rewrite it so it means the same thing using only her allowed words and none of those.
 Replace each of those words with an allowed word or phrase of similar MEANING, or
@@ -488,6 +492,19 @@ def slip(reply: str) -> str | None:
     return m.group(0) if m else None
 
 
+def mood_fits(user: str, mood: str) -> bool:
+    """Does the person's message plausibly earn this mood? Uses her mood tracker's own
+    word lists, so a message full of kind words is never labelled offended, and an
+    insult is never labelled delighted."""
+    words = set(re.findall(r"[a-z']+", user.lower()))
+    kind, unkind = bool(words & KIND), bool(words & UNKIND)
+    if mood in ("offense", "pain") and kind and not unkind:
+        return False
+    if mood in ("pleasure", "grateful") and unkind and not kind:
+        return False
+    return True
+
+
 def why_not(tok: Tokenizer, user: str, reply: str, turns: list[dict], seen: dict[str, int]) -> str | None:
     """What makes this exchange unfit to train on, or None if nothing does. Every check
     here is mechanical."""
@@ -542,7 +559,7 @@ class Rejects:
 
 def write_reply(teacher: Teacher, tok: Tokenizer, system: str, task: str, tries: int,
                 grammar: str | None = None, tired: tuple[str, ...] = (),
-                first: str | None = None) -> tuple[str, int]:
+                first: str | None = None, statement: bool = False) -> tuple[str, int]:
     """Write, check, repair. Returns (reply, tries used); reply is "" if it never passed.
     `first` is a draft already written (as part of a whole conversation); it counts as
     the first try."""
@@ -558,12 +575,15 @@ def write_reply(teacher: Teacher, tok: Tokenizer, system: str, task: str, tries:
         ok, bad = tok.can_say(reply)
         leaned = [w for w in tok.split(reply) if w in tired]
         broken = slip(reply)
-        if reply and ok and not leaned and not broken:
+        asks = statement and reply.endswith("?")
+        if reply and ok and not leaned and not broken and not asks:
             return reply, attempt
         if not reply:
             continue
-        if ok and not leaned:   # only the grammar is wrong
+        if ok and not leaned and broken:   # only the grammar is wrong
             fix = GRAMMAR_TASK.format(slip=broken)
+        elif ok and not leaned:            # only the question mark is wrong
+            fix = STATEMENT_TASK
         else:
             fix = REPAIR_TASK.format(bad=describe_bad(tok, sorted(set(bad) | set(leaned))[:12]))
         messages = messages[:2] + [
@@ -746,11 +766,16 @@ def make_whole(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random
     rejected = repairs = 0
     for (user, line), mood in zip(parse_whole(draft), moods):
         user = clean(user)
+        if not mood_fits(user, mood):     # the teacher wrote a message that does not fit the mood
+            Rejects.note(stage="check", user=user, reply=line, why=f"mood {mood} does not fit the message")
+            rejected += 1
+            break
         feeling = FEELINGS[mood][0]
+        asked_last = bool(turns) and turns[-1]["reply"].endswith("?")
         reply, used = write_reply(teacher, tok, system, EXCELSIA_TALK.format(
             so_far=transcript(turns, user), feeling=feeling,
             tired=TIRED.format(words=", ".join(tired)) if tired else ""),
-            tries, None, tired, first=line)
+            tries, None, tired, first=line, statement=asked_last)
         repairs += used - 1
         why = why_not(tok, user, reply, turns, {}) if reply else "never passed the word check"
         if why is not None:

@@ -455,6 +455,17 @@ def test_broken_grammar_is_caught_and_sent_back():
     assert "broken grammar" in teacher.asked[1][-1]["content"]
 
 
+def test_moods_fit_the_message_and_questions_take_turns():
+    from excelsia.gen_chats import mood_fits
+    assert not mood_fits("u look kinda cute actually lol", "offense")
+    assert not mood_fits("you are stupid", "pleasure")
+    assert mood_fits("you are stupid", "offense") and mood_fits("hi there", "pain")
+    teacher = FakeTeacher(["my waters are still?", "my waters are still."])
+    reply, tries = write_reply(teacher, tok, "system", "task", tries=3, statement=True)
+    assert (reply, tries) == ("my waters are still.", 2)
+    assert "statement" in teacher.asked[1][-1]["content"]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
