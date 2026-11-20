@@ -40,7 +40,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from .tokenizer import DATA, MOODS, Tokenizer
@@ -786,10 +786,15 @@ def main() -> None:
     start = time.time()
     stop = False
     with out.open("a", encoding="utf-8") as f, ThreadPoolExecutor(workers) as pool:
-        while made < a.n and not stop:
-            batch = [pool.submit(write_one, teacher, tok, system, random.Random(rng.random()),
-                                 a.tries, grammar, tally) for _ in range(min(workers * 2, a.n - made))]
-            for job in as_completed(batch):
+        # Keep every worker busy: a new chat starts as soon as one finishes, rather than
+        # waiting for the slowest chat of a batch.
+        pending: set = set()
+        while (made < a.n and not stop) or pending:
+            while not stop and made < a.n and len(pending) < workers:
+                pending.add(pool.submit(write_one, teacher, tok, system, random.Random(rng.random()),
+                                        a.tries, grammar, tally))
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for job in done:
                 try:
                     chat, bad, fixed = job.result()
                 except SystemExit as halt:       # out of credit, a bad key, or the teacher is gone
@@ -828,7 +833,7 @@ def main() -> None:
                         rate = (time.time() - start) / made
                         print(f"{made}/{a.n} chats  ({rejected} rejected)  "
                               f"about {rate * (a.n - made) / 60:.0f} min left", flush=True)
-            if rejected > max(60, min(10 * a.n, 300)) and rejected > 20 * max(made, 1):
+            if not stop and rejected > max(60, min(10 * a.n, 300)) and rejected > 20 * max(made, 1):
                 print(f"Stopping early: {rejected} exchanges rejected against {made} chats kept. "
                       "The teacher is not managing to stay inside her word list.")
                 stop = True

@@ -125,7 +125,7 @@ one at a time as they are written.
 
 ## Running the teacher on a rented GPU
 
-`scripts/thunder.sh` runs an open teacher, Qwen3.6-35B-A3B (Apache 2.0), on a rented
+`scripts/thunder.sh` runs an open teacher, Qwen3.6-27B (Apache 2.0), on a rented
 server with one 48 GB card (written for Thunder Compute, works on any such Linux
 machine). It writes each practice conversation in one request, sends only her lines
 that fail the word check back for repair, and logs every rejected line with the reason.

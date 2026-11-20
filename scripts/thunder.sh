@@ -10,9 +10,9 @@
 # Start long stages in the background so a dropped connection does not stop them:
 #   nohup bash scripts/thunder.sh pilot > ~/pilot.log 2>&1 &
 #
-# The teacher is Qwen3.6-35B-A3B (Apache 2.0) in Qwen's own FP8 version, served by vLLM on
-# the server's own card. It uses about 3B of its 35B numbers per word, so it writes fast.
-# Set EXCELSIA_TEACHER=Qwen/Qwen3.6-27B-FP8 for the slower, denser one. Each conversation
+# The teacher is Qwen3.6-27B (Apache 2.0) in Qwen's own FP8 version, served by vLLM on the
+# server's own card: about 250-400 conversations an hour on an RTX A6000. The lighter
+# Qwen/Qwen3.6-35B-A3B-FP8 (set EXCELSIA_TEACHER) is faster but wrote her flat and legal. Each conversation
 # is written in one request, and only her lines that fail the word check go back for
 # repair. Every thrown-away exchange is logged, with the reason, in work/rejects.jsonl.
 # No hosted AI service is called.
@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ENV="${EXCELSIA_ENV:-$HOME/env}"
-MODEL="${EXCELSIA_TEACHER:-Qwen/Qwen3.6-35B-A3B-FP8}"
+MODEL="${EXCELSIA_TEACHER:-Qwen/Qwen3.6-27B-FP8}"
 PORT=8000
 LOGS="${EXCELSIA_LOGS:-$HOME}"
 
