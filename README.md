@@ -123,6 +123,18 @@ if the tab loses its connection. `scripts/kaggle.sh all` does the work. With two
 GPUs it trains on one while Gemma writes chats on the other, and chats are saved
 one at a time as they are written.
 
+## Running the teacher on a rented GPU
+
+`scripts/thunder.sh` runs an open teacher, Qwen3.6-27B (Apache 2.0), on a rented
+server with one 48 GB card (written for Thunder Compute, works on any such Linux
+machine). It writes practice conversations for free, as fast as the card allows.
+
+```bash
+bash scripts/thunder.sh setup                                   # once
+nohup bash scripts/thunder.sh pilot > ~/pilot.log 2>&1 &        # 50 to read first
+nohup bash scripts/thunder.sh chats 20000 > ~/chats.log 2>&1 &  # then the real run
+```
+
 ## A page of her own
 
 `web/` is a small website where anyone can talk to her. She runs in the visitor's
@@ -190,6 +202,8 @@ by everyone. Her replies begin with her mood in brackets. Moderators can use
 - The practice chats in `data/chats.jsonl` and `data/chats-talk.jsonl`, written by
   DeepSeek's hosted API (the `deepseek-flash` model) in November 2026 with
   `--teacher deepseek`, the second set with `--talk`.
+- Any practice chats in `data/chats-qwen.jsonl`, written by Qwen3.6-27B (Apache 2.0)
+  running on a rented GPU with `scripts/thunder.sh`.
 - The practice chats in `data/chats-gpt.jsonl`, written by GPT-6.2 Astra in
   ChatGPT in November 2026 from a prompt asking for longer conversations with
   follow-ups and changes of subject. They were then checked line by line with

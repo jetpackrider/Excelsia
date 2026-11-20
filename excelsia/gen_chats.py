@@ -359,7 +359,8 @@ class Teacher:
         with self.lock:
             self.calls += 1
             self.tokens_in += usage.get("prompt_tokens", 0)
-            self.tokens_cached += usage.get("prompt_cache_hit_tokens", 0)
+            self.tokens_cached += usage.get("prompt_cache_hit_tokens", 0) or \
+                (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
             self.tokens_out += usage.get("completion_tokens", 0)
         return (out["choices"][0]["message"].get("content") or "").strip()
 
@@ -501,20 +502,25 @@ def make_talk(teacher: Teacher, tok: Tokenizer, system: str, rng: random.Random,
     return {"topic": topic, "turns": turns if len(turns) >= 2 else []}, rejected, repairs
 
 
+VLLM_MODEL = "Qwen/Qwen3.6-27B-FP8"   # Apache 2.0; fits one 48 GB card
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="python -m excelsia.gen_chats")
     p.add_argument("--n", type=int, default=300, help="how many chats to add")
     p.add_argument("--out", help="file to add to (default data/chats.jsonl, or data/chats-talk.jsonl with --talk)")
     p.add_argument("--talk", action="store_true",
                    help="write longer chats built to teach conversation: follow-ups, changes of subject")
-    p.add_argument("--teacher", choices=["local", "deepseek"], default="local")
+    p.add_argument("--teacher", choices=["local", "deepseek", "vllm"], default="local",
+                   help="local: llama.cpp on this machine; deepseek: DeepSeek's API; "
+                        "vllm: an open model served by vLLM on a GPU server (see scripts/thunder.sh)")
     p.add_argument("--server", help="address of the teacher (default depends on --teacher)")
     p.add_argument("--model", help="model name for a hosted API (deepseek: deepseek-flash or deepseek-v4-pro)")
     p.add_argument("--key-env", help="name of the environment variable holding the API key")
     p.add_argument("--tries", type=int, default=3, help="write + repair passes before giving up on a line")
     p.add_argument("--workers", type=int, help="chats written at the same time")
     p.add_argument("--grammar", action="store_true", help="local llama.cpp only: force letters through a grammar")
-    p.add_argument("--think", action="store_true", help="deepseek: let the model think first (slower, costs more)")
+    p.add_argument("--think", action="store_true", help="deepseek or vllm: let the model think first (slower)")
     p.add_argument("--replace", action="store_true",
                    help="start the file over (the old chats are kept in work/)")
     p.add_argument("--sample", type=int, default=15, help="how many chats to print at the end")
@@ -539,6 +545,14 @@ def main() -> None:
                           a.model or "deepseek-flash", key,
                           {} if a.think else {"thinking": {"type": "disabled"}}, local=False)
         workers = a.workers or 8
+    elif a.teacher == "vllm":
+        # Qwen's settings for answering without thinking first. Her lines are short, and
+        # thinking would mostly burn time.
+        teacher = Teacher(a.server or "http://127.0.0.1:8000", model=a.model or VLLM_MODEL,
+                          extra={"chat_template_kwargs": {"enable_thinking": a.think},
+                                 "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5},
+                          local=False)
+        workers = a.workers or 48
     else:
         key = os.environ.get(a.key_env) if a.key_env else None
         teacher = Teacher(a.server or "http://127.0.0.1:8080", model=a.model, key=key,
